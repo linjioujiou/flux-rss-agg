@@ -9,3 +9,15 @@ dev.log
 .DS_Store
 dist/
 .cache/
+
+# secrets / local helpers (do not publish)
+.gh-token
+.gh-device-state.json
+.gh-push-url
+.gh-user
+gh-poll.log
+gh-poll.stdout
+gh-poll.stderr
+_gh_*.py
+_run_poll.*
+upload-github.ps1
