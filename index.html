@@ -8,7 +8,7 @@
   <title>Flux · RSS 聚合</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%23a78bfa'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='%230b0d12'/%3E%3Cpath d='M8 18c4 0 6-2 6-6M8 22c7 0 10-3 10-10M8 14c1.5 0 2.5-.8 2.5-2.5' stroke='url(%23g)' stroke-width='2.2' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='8' cy='24' r='1.6' fill='%237dd3fc'/%3E%3C/svg%3E" />
 </head>
@@ -128,15 +128,31 @@
         </section>
 
         <section class="reader glass" id="reader" aria-hidden="true">
+          <div class="reader-progress" aria-hidden="true">
+            <div class="reader-progress-bar" id="readerProgress"></div>
+          </div>
           <div class="reader-bar">
-            <button type="button" class="icon-btn" id="closeReader" aria-label="关闭阅读">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-            </button>
+            <div class="reader-bar-left">
+              <button type="button" class="icon-btn" id="closeReader" aria-label="关闭阅读" title="关闭 · Esc">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <div class="reader-pos" id="readerPos" aria-live="polite">—</div>
+            </div>
             <div class="reader-actions">
-              <button type="button" class="icon-btn" id="starBtn" aria-label="收藏" title="收藏">
+              <div class="reader-type glass-inset" role="group" aria-label="正文字号">
+                <button type="button" class="type-btn" id="fontDec" aria-label="减小字号" title="减小字号 · [">A-</button>
+                <button type="button" class="type-btn" id="fontInc" aria-label="增大字号" title="增大字号 · ]">A+</button>
+              </div>
+              <button type="button" class="icon-btn" id="markUnreadBtn" aria-label="标为未读" title="标为未读 · U">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12c2.4-4.8 5.7-7 9-7s6.6 2.2 9 7c-2.4 4.8-5.7 7-9 7s-6.6-2.2-9-7z"/></svg>
+              </button>
+              <button type="button" class="icon-btn" id="starBtn" aria-label="收藏" title="收藏 · S">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5l2.7 5.5 6 .9-4.3 4.2 1 6-5.4-2.9L6.6 20l1-6L3.3 9.9l6-.9L12 3.5z"/></svg>
               </button>
-              <a class="icon-btn" id="openOriginal" href="#" target="_blank" rel="noopener noreferrer" aria-label="打开原文" title="打开原文">
+              <button type="button" class="icon-btn" id="copyLinkBtn" aria-label="复制链接" title="复制链接">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              </button>
+              <a class="icon-btn" id="openOriginal" href="#" target="_blank" rel="noopener noreferrer" aria-label="打开原文" title="打开原文 · O">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>
               </a>
             </div>
@@ -144,8 +160,19 @@
           <article class="reader-body" id="readerBody">
             <div class="reader-meta" id="readerMeta"></div>
             <h2 class="reader-title" id="readerTitle"></h2>
+            <div class="reader-stats" id="readerStats"></div>
             <div class="reader-content prose" id="readerContent"></div>
           </article>
+          <nav class="reader-nav" id="readerNav" aria-label="文章导航">
+            <button type="button" class="reader-nav-btn" id="prevArticle" disabled>
+              <span class="reader-nav-kicker">上一篇 · K</span>
+              <span class="reader-nav-title" id="prevTitle">没有更多了</span>
+            </button>
+            <button type="button" class="reader-nav-btn is-next" id="nextArticle" disabled>
+              <span class="reader-nav-kicker">下一篇 · J</span>
+              <span class="reader-nav-title" id="nextTitle">没有更多了</span>
+            </button>
+          </nav>
         </section>
       </div>
     </main>

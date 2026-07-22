@@ -1,4 +1,4 @@
-﻿/* =========================================================
+/* =========================================================
    Flux 闁?RSS Aggregate
    Design: Emil Kowalski craft + liquid glass materials
    ========================================================= */
@@ -9,11 +9,15 @@
   --text: #eef2ff;
   --text-2: rgba(238, 242, 255, 0.72);
   --text-3: rgba(238, 242, 255, 0.45);
-  --line: rgba(255, 255, 255, 0.11);
-  --line-2: rgba(255, 255, 255, 0.16);
-  --glass: rgba(255, 255, 255, 0.024);
-  --glass-strong: rgba(255, 255, 255, 0.048);
-  --glass-inset: rgba(255, 255, 255, 0.03);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-2: rgba(255, 255, 255, 0.13);
+  /* Glass fills stay thin — edge/specular carry the material (Emil) */
+  --glass: rgba(255, 255, 255, 0.018);
+  --glass-strong: rgba(255, 255, 255, 0.036);
+  --glass-inset: rgba(255, 255, 255, 0.022);
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-edge-soft: rgba(255, 255, 255, 0.08);
+  --glass-specular: rgba(255, 255, 255, 0.22);
   --accent: #8bdbff;
   --accent-2: #b39cff;
   --accent-soft: rgba(139, 219, 255, 0.14);
@@ -40,23 +44,25 @@
   --list-min: 280px;
   --reader-pad-x: 24px;
   --toolbar-h: 40px;
+  --vrow: 88px; /* virtual list estimated row height */
+  /* Edge light > fill. Outer drop is soft so glass doesn't feel heavy. */
   --shadow-glass:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -0.5px 0 rgba(255, 255, 255, 0.035),
-    0 1px 0 rgba(255, 255, 255, 0.03),
-    0 12px 32px rgba(0, 0, 0, 0.22);
-  --shadow-float: 0 24px 60px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 var(--glass-specular),
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.03),
+    0 1px 0 rgba(255, 255, 255, 0.025),
+    0 10px 28px rgba(0, 0, 0, 0.18);
+  --shadow-float: 0 20px 48px rgba(0, 0, 0, 0.48);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-  --font: "Inter", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font: "Inter", "NSimSun", "新宋体", "SimSun", "Songti SC", "STSong", serif;
   --sidebar-w: 268px;
   --topbar-h: 60px;
   --reader-w: min(520px, 44vw);
-  --blur: 14px;
-  --blur-nested: 8px;
-  --blur-panel: 12px;
-  --saturate: 124%;
+  --blur: 16px;
+  --blur-nested: 6px;
+  --blur-panel: 10px;
+  --saturate: 118%;
 }
 
 *,
@@ -106,70 +112,102 @@ img {
   display: block;
 }
 
-/* ---------- Ambient liquid backdrop ---------- */
+/* ---------- Ambient liquid backdrop · quiet field (Emil restraint) ----------
+   Decorative only. Gradients do the mood work; orbs are almost still.
+   Frequency: always-on chrome → motion must be invisible, not a show.
+   ------------------------------------------------------------- */
 .ambient {
   position: fixed;
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  /* Quiet depth field — restraint over spectacle */
+  pointer-events: none;
+  /* Static depth field carries 90% of atmosphere */
   background:
-    radial-gradient(1000px 640px at 12% -5%, rgba(125, 211, 252, 0.14), transparent 60%),
-    radial-gradient(900px 600px at 88% 8%, rgba(167, 139, 250, 0.11), transparent 58%),
-    radial-gradient(800px 520px at 50% 110%, rgba(56, 189, 248, 0.07), transparent 58%),
-    linear-gradient(180deg, #07090f 0%, #0a0e18 50%, #07090f 100%);
+    radial-gradient(980px 620px at 8% -6%, rgba(125, 211, 252, 0.055), transparent 64%),
+    radial-gradient(880px 560px at 94% 2%, rgba(167, 139, 250, 0.045), transparent 62%),
+    radial-gradient(740px 480px at 50% 110%, rgba(56, 189, 248, 0.028), transparent 62%),
+    linear-gradient(180deg, #07090f 0%, #090d16 52%, #07090f 100%);
 }
 
 .orb {
   position: absolute;
   border-radius: 50%;
-  /* Decorative only; keep blur cost off interactive surfaces */
-  filter: blur(72px);
-  opacity: 0.42;
-  animation: float 22s var(--ease-in-out) infinite alternate;
+  /* Extra-soft wash — large blur, low chroma, low opacity */
+  filter: blur(100px);
+  opacity: 0.12;
+  /* will-change only while animating; dropped when paused */
+  will-change: transform;
+  /* Near-still drift: long period, tiny travel */
+  animation: float 72s var(--ease-in-out) infinite alternate;
 }
 
 .orb-a {
-  width: 440px;
-  height: 440px;
-  left: -80px;
-  top: 8%;
-  background: radial-gradient(circle at 30% 30%, rgba(125, 211, 252, 0.58), rgba(37, 99, 235, 0.25) 50%, transparent 70%);
-  animation-duration: 24s;
+  width: 520px;
+  height: 520px;
+  left: -140px;
+  top: 2%;
+  background: radial-gradient(
+    circle at 32% 32%,
+    rgba(125, 211, 252, 0.22),
+    rgba(56, 120, 210, 0.07) 50%,
+    transparent 74%
+  );
+  animation-duration: 78s;
+  animation-delay: -18s;
 }
 
 .orb-b {
-  width: 520px;
-  height: 520px;
-  right: -120px;
-  top: -40px;
-  background: radial-gradient(circle at 40% 40%, rgba(196, 181, 253, 0.52), rgba(124, 58, 237, 0.22) 50%, transparent 70%);
-  animation-duration: 28s;
-  animation-delay: -5s;
+  width: 580px;
+  height: 580px;
+  right: -180px;
+  top: -100px;
+  background: radial-gradient(
+    circle at 42% 38%,
+    rgba(180, 160, 250, 0.18),
+    rgba(110, 70, 200, 0.06) 52%,
+    transparent 74%
+  );
+  animation-duration: 90s;
+  animation-delay: -36s;
+  opacity: 0.1;
 }
 
 .orb-c {
-  width: 400px;
-  height: 400px;
+  width: 460px;
+  height: 460px;
   left: 36%;
-  bottom: -120px;
-  background: radial-gradient(circle at 50% 40%, rgba(103, 232, 249, 0.42), rgba(14, 165, 233, 0.2) 48%, transparent 70%);
-  animation-duration: 26s;
-  animation-delay: -9s;
+  bottom: -180px;
+  background: radial-gradient(
+    circle at 50% 40%,
+    rgba(90, 200, 230, 0.14),
+    rgba(20, 130, 180, 0.05) 52%,
+    transparent 74%
+  );
+  animation-duration: 84s;
+  animation-delay: -48s;
+  opacity: 0.09;
 }
 
 .noise {
   position: absolute;
   inset: 0;
-  opacity: 0.022;
+  opacity: 0.012;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   mix-blend-mode: overlay;
 }
 
+/* Barely-there drift — if you notice it, it's too loud */
 @keyframes float {
   from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(30px, -24px, 0) scale(1.06); }
+  to   { transform: translate3d(5px, -4px, 0) scale(1.01); }
+}
+
+/* Battery/perf: freeze orbs when tab hidden or reduced-motion */
+.ambient.is-paused .orb {
+  animation-play-state: paused;
+  will-change: auto;
 }
 
 /* ---------- Liquid glass · Emil craft ----------
@@ -179,18 +217,18 @@ img {
    Transparency: thin fill; specular + hairline define the surface.
    ------------------------------------------------ */
 .glass {
-  /* Thin liquid fill — ambient reads through; not milky frost */
+  /* Near-clear liquid — ambient reads through; not milky frost */
   background:
     linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.048) 0%,
-      rgba(255, 255, 255, 0.016) 42%,
-      rgba(255, 255, 255, 0.008) 100%
+      165deg,
+      rgba(255, 255, 255, 0.055) 0%,
+      rgba(255, 255, 255, 0.014) 38%,
+      rgba(255, 255, 255, 0.006) 100%
     ),
     var(--glass);
   backdrop-filter: blur(var(--blur)) saturate(var(--saturate));
   -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--saturate));
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-edge-soft);
   box-shadow: var(--shadow-glass);
   position: relative;
   isolation: isolate;
@@ -200,20 +238,22 @@ img {
     box-shadow 160ms var(--ease-out);
 }
 
-/* Top catch-light only — one quiet specular (defines glass when fill is thin) */
+/* Top catch-light — one quiet specular defines glass when fill is thin */
 .glass::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.16) 0%,
-    rgba(255, 255, 255, 0.04) 12%,
-    rgba(255, 255, 255, 0.012) 28%,
-    transparent 48%
-  );
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.2) 0%,
+      rgba(255, 255, 255, 0.06) 10%,
+      rgba(255, 255, 255, 0.015) 26%,
+      transparent 46%
+    );
+  opacity: 0.85;
   z-index: 1;
 }
 
@@ -225,9 +265,9 @@ img {
   border-radius: inherit;
   pointer-events: none;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.025),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.03),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035);
   z-index: 1;
 }
 
@@ -236,36 +276,34 @@ img {
   z-index: 2;
 }
 
-/* Hover: fine pointer only; edge light lifts slightly — no scale on shells */
-/* Shell hover: skipped — large chrome is hovered constantly; no motion tax */
-
+/* Shell hover skipped — large chrome is hovered constantly; no motion tax */
 
 /* Nested controls share the same glass language at lower cost */
 .glass-inset {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.04) 0%,
-      rgba(255, 255, 255, 0.012) 100%
+      rgba(255, 255, 255, 0.035) 0%,
+      rgba(255, 255, 255, 0.008) 100%
     ),
     var(--glass-inset);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 -0.5px 0 rgba(0, 0, 0, 0.1);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.12);
   /* Nested blur stays light; never stack 40px+ on controls */
-  backdrop-filter: blur(var(--blur-nested)) saturate(120%);
-  -webkit-backdrop-filter: blur(var(--blur-nested)) saturate(120%);
+  backdrop-filter: blur(var(--blur-nested)) saturate(112%);
+  -webkit-backdrop-filter: blur(var(--blur-nested)) saturate(112%);
   transition:
-    border-color 160ms var(--ease-out),
-    box-shadow 160ms var(--ease-out),
-    background-color 160ms var(--ease-out);
+    border-color 150ms var(--ease-out),
+    box-shadow 150ms var(--ease-out),
+    background-color 150ms var(--ease-out);
 }
 
 .glass-inset:focus-within {
-  border-color: rgba(139, 219, 255, 0.34);
+  border-color: rgba(139, 219, 255, 0.38);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 0 0 3px rgba(139, 219, 255, 0.1);
 }
 
@@ -318,9 +356,13 @@ img {
   border-radius: 11px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015)),
+    rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .brand-name {
@@ -369,7 +411,7 @@ img {
   flex-direction: column;
   gap: 2px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 .feed-item {
@@ -400,11 +442,11 @@ img {
 }
 
 .feed-item.is-active {
-  background: linear-gradient(135deg, rgba(139, 219, 255, 0.08), rgba(167, 139, 250, 0.03));
+  background: transparent; /* wash via ::before (motion system) */
   color: var(--text);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 0 1px rgba(139, 219, 255, 0.22);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px rgba(139, 219, 255, 0.18);
 }
 
 .feed-dot {
@@ -532,10 +574,10 @@ img {
 
 .page-title {
   margin: 0;
-  font-size: 1.02rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.032em;
+  line-height: 1.18;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -668,25 +710,48 @@ img {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-xl);
-  /* Same glass system, one step quieter than chrome shells */
+  position: relative;
+  isolation: isolate;
+  /* One step quieter than shell glass — content stage, not chrome */
   background:
     linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.036) 0%,
-      rgba(255, 255, 255, 0.012) 100%
+      165deg,
+      rgba(255, 255, 255, 0.032) 0%,
+      rgba(255, 255, 255, 0.008) 100%
     ),
-    rgba(255, 255, 255, 0.018);
+    rgba(255, 255, 255, 0.012);
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate));
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.15),
-    inset 0 -0.5px 0 rgba(255, 255, 255, 0.025),
-    0 8px 28px rgba(0, 0, 0, 0.16);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.02),
+    0 8px 24px rgba(0, 0, 0, 0.14);
   overflow: hidden;
   transition:
     border-color 160ms var(--ease-out),
     box-shadow 160ms var(--ease-out);
+}
+
+/* Soft top specular on content panels — matches shell language quietly */
+.feed-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.02) 14%,
+    transparent 36%
+  );
+  z-index: 0;
+}
+
+.feed-panel > * {
+  position: relative;
+  z-index: 1;
 }
 
 .list-toolbar {
@@ -695,9 +760,10 @@ img {
   justify-content: space-between;
   gap: var(--space-3);
   min-height: var(--toolbar-h);
-  padding: 8px var(--panel-pad-x);
+  padding: 6px var(--panel-pad-x);
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
 }
 
 .toolbar-actions {
@@ -744,14 +810,44 @@ img {
   flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: var(--space-2) var(--space-2) var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  padding: 8px 8px var(--space-5);
+  display: block;
+  position: relative;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
   scroll-padding-top: var(--space-2);
   scroll-padding-bottom: var(--space-4);
+  contain: layout style paint;
+}
+
+.vlist-spacer-top,
+.vlist-spacer-bottom {
+  width: 100%;
+  flex-shrink: 0;
+  pointer-events: none;
+  /* Avoid layout thrash when spacer heights jump */
+  contain: strict;
+}
+
+.vlist-window {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  contain: layout style;
+}
+
+.vlist-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 0.9rem;
+}
+
+.article-list .article-card {
+  min-height: calc(var(--vrow, 88px) - 2px);
+  max-height: calc(var(--vrow, 88px) - 2px);
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 /* Article card — glass chip
@@ -760,17 +856,18 @@ img {
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-3);
-  padding: 11px 12px;
+  gap: 10px 12px;
+  padding: 10px 12px;
   border-radius: 12px;
   text-align: left;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text);
   transition:
-    background-color 160ms var(--ease-out),
-    border-color 160ms var(--ease-out),
-    transform 150ms var(--ease-out);
+    background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
+    transform 140ms var(--ease-out),
+    opacity 150ms var(--ease-out);
   margin-bottom: 0;
 }
 
@@ -791,24 +888,35 @@ img {
 
 @media (hover: hover) and (pointer: fine) {
   .article-card:hover {
-    background: rgba(255, 255, 255, 0.045);
+    background: rgba(255, 255, 255, 0.035);
     border-color: rgba(255, 255, 255, 0.06);
   }
 }
 
 .article-card.is-active {
+  /* Selected chip: thin glass + accent wash, not a solid block */
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
-    rgba(139, 219, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
+    linear-gradient(165deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%),
+    rgba(139, 219, 255, 0.05);
+  border-color: rgba(139, 219, 255, 0.22);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 6px 18px rgba(0, 0, 0, 0.14);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.article-card.is-read {
+  opacity: 0.68;
 }
 
 .article-card.is-read .article-title {
   color: var(--text-2);
   font-weight: 500;
+}
+
+.article-card.is-read.is-active,
+.article-card.is-read:hover {
+  opacity: 1;
 }
 
 .article-main {
@@ -833,21 +941,22 @@ img {
 
 .article-title {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: 0.93rem;
   font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.38;
+  letter-spacing: -0.022em;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  text-wrap: pretty;
 }
 
 .article-snippet {
-  margin: 5px 0 0;
-  font-size: 0.82rem;
+  margin: 4px 0 0;
+  font-size: 0.8rem;
   color: var(--text-3);
-  line-height: 1.45;
+  line-height: 1.42;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -870,11 +979,11 @@ img {
 }
 
 .unread-pip {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 10px rgba(139, 219, 255, 0.55);
+  box-shadow: 0 0 0 3px rgba(139, 219, 255, 0.12);
 }
 
 .star-mark {
@@ -893,6 +1002,10 @@ img {
   display: none;
 }
 
+.empty[hidden] {
+  display: none !important;
+}
+
 .empty {
   margin: auto;
   max-width: 22rem;
@@ -904,17 +1017,18 @@ img {
 }
 
 .empty-icon {
-  width: 64px;
-  height: 64px;
+  width: 60px;
+  height: 60px;
   margin: 0 auto 16px;
-  border-radius: 18px;
+  border-radius: 16px;
   display: grid;
   place-items: center;
   color: var(--accent);
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
-    var(--accent-soft);
-  border: 1px solid rgba(139, 219, 255, 0.2);
+    linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.01)),
+    rgba(139, 219, 255, 0.1);
+  border: 1px solid rgba(139, 219, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .empty h2 {
@@ -930,15 +1044,25 @@ img {
 }
 
 .loading-state {
-  display: flex;
+  /* default hidden — author display must not override [hidden] */
+  display: none;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex: 1;
-  min-height: 160px;
-  padding: 48px 16px;
+  min-height: 120px;
+  padding: 28px 16px;
   color: var(--text-3);
-  font-size: 0.9rem;
+  font-size: 0.86rem;
+  letter-spacing: 0.01em;
+}
+
+.loading-state:not([hidden]) {
+  display: flex;
+}
+
+.loading-state[hidden] {
+  display: none !important;
 }
 
 .spinner,
@@ -948,7 +1072,7 @@ img {
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.12);
   border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.55s linear infinite;
 }
 
 .btn-spinner {
@@ -963,6 +1087,8 @@ img {
 
 /* ---------- Reader ---------- */
 .reader {
+  --reader-font: 1rem;
+  --reader-line: 1.75;
   border-radius: var(--radius-xl);
   min-width: 0;
   min-height: 0;
@@ -970,33 +1096,119 @@ img {
   flex-direction: column;
   overflow: hidden;
   transform-origin: right center;
+  position: relative;
+}
+
+.reader-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  z-index: 3;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.reader-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 0 1px 1px 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transform-origin: left center;
+  /* scroll is continuous — keep transition tiny, not springy */
+  transition: width 80ms linear;
+  will-change: width;
 }
 
 .reader-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   min-height: var(--toolbar-h);
   height: var(--toolbar-h);
   padding: 0 8px 0 6px;
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  position: relative;
+  z-index: 2;
+}
+
+.reader-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.reader-pos {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  padding: 0 4px;
 }
 
 .reader-actions {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex-shrink: 0;
+}
+
+.reader-type {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border-radius: 10px;
+  padding: 2px;
+  margin-right: 2px;
+  gap: 0;
+}
+
+.type-btn {
+  min-width: 30px;
+  height: 28px;
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-2);
+  transition:
+    background-color 150ms var(--ease-out),
+    color 150ms var(--ease-out),
+    transform 140ms var(--ease-out);
+}
+
+.type-btn:active {
+  transform: scale(0.97);
+}
+
+.type-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .type-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+  }
 }
 
 .reader-body {
   flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: var(--space-5) var(--reader-pad-x) max(var(--space-8), env(safe-area-inset-bottom));
+  padding: var(--space-5) var(--reader-pad-x) var(--space-4);
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
   scroll-padding-top: var(--space-4);
+  scroll-behavior: auto; /* keyboard/list nav is high-frequency — no smooth scroll */
 }
 
 .reader-meta {
@@ -1012,8 +1224,8 @@ img {
 }
 
 .reader-title {
-  margin: 0 auto 18px;
-  font-size: clamp(1.18rem, 1.4vw, 1.38rem);
+  margin: 0 auto 10px;
+  font-size: clamp(1.22rem, 1.5vw, 1.48rem);
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.28;
@@ -1022,13 +1234,32 @@ img {
   text-wrap: balance;
 }
 
+.reader-stats {
+  margin: 0 auto 18px;
+  max-width: var(--measure);
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.reader-stats .stat-sep {
+  opacity: 0.45;
+}
+
 .prose {
-  font-size: 0.95rem;
-  line-height: 1.72;
+  font-size: var(--reader-font, 1rem);
+  line-height: var(--reader-line, 1.75);
   color: var(--text-2);
   max-width: var(--measure);
   width: 100%;
   margin: 0 auto;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .prose p {
@@ -1039,27 +1270,60 @@ img {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+  text-decoration-thickness: from-font;
+}
+
+.prose a:hover {
+  color: #b8ebff;
 }
 
 .prose img {
   border-radius: 12px;
-  margin: 12px 0;
+  margin: 14px auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
+  max-width: 100%;
+  height: auto;
+}
+
+.prose figure {
+  margin: 1.1em 0;
+}
+
+.prose figcaption {
+  margin-top: 6px;
+  font-size: 0.82em;
+  color: var(--text-3);
+  text-align: center;
 }
 
 .prose h1,
 .prose h2,
-.prose h3 {
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
   color: var(--text);
   letter-spacing: -0.02em;
   line-height: 1.3;
-  margin: 1.4em 0 0.5em;
+  margin: 1.45em 0 0.5em;
+  font-weight: 650;
 }
+
+.prose h1 { font-size: 1.28em; }
+.prose h2 { font-size: 1.16em; }
+.prose h3 { font-size: 1.06em; }
 
 .prose pre,
 .prose code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.86em;
+  font-size: 0.88em;
+}
+
+.prose code {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
 }
 
 .prose pre {
@@ -1068,6 +1332,15 @@ img {
   border-radius: 12px;
   padding: 14px;
   overflow: auto;
+  line-height: 1.55;
+}
+
+.prose pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
 }
 
 .prose blockquote {
@@ -1080,12 +1353,145 @@ img {
 .prose ul,
 .prose ol {
   padding-left: 1.3em;
+  margin: 0 0 1em;
+}
+
+.prose li {
+  margin: 0.28em 0;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin: 0.2em 0;
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1.6em 0;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.prose th {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .star-btn-on {
   color: #fbbf24 !important;
 }
 
+/* Reader bottom nav — occasional, spatial continuity */
+.reader-nav {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px 10px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.02));
+}
+
+.reader-nav-btn {
+  min-width: 0;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    rgba(255, 255, 255, 0.015);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: var(--text-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition:
+    background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
+    color 150ms var(--ease-out),
+    transform 140ms var(--ease-out),
+    box-shadow 150ms var(--ease-out);
+}
+
+.reader-nav-btn.is-next {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.reader-nav-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.reader-nav-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reader-nav-btn:hover:not(:disabled) {
+    background:
+      linear-gradient(165deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+}
+
+.reader-nav-kicker {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.reader-nav-title {
+  font-size: 0.82rem;
+  font-weight: 560;
+  line-height: 1.3;
+  color: inherit;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+/* Empty body hint inside reader */
+.reader-empty-hint {
+  margin: 0 auto;
+  max-width: var(--measure);
+  padding: 18px 16px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--text-3);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.reader-empty-hint a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 /* ---------- Buttons / icons ---------- */
 .icon-btn {
   width: var(--control-h);
@@ -1095,10 +1501,13 @@ img {
   display: grid;
   place-items: center;
   color: var(--text-2);
+  border: 1px solid transparent;
   transition:
     background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
     color 150ms var(--ease-out),
-    transform 140ms var(--ease-out);
+    transform 140ms var(--ease-out),
+    box-shadow 150ms var(--ease-out);
 }
 
 .icon-btn:active {
@@ -1107,7 +1516,9 @@ img {
 
 @media (hover: hover) and (pointer: fine) {
   .icon-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.055);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     color: var(--text);
   }
 }
@@ -1153,7 +1564,7 @@ img {
   border: 1px solid rgba(255, 255, 255, 0.35);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.35) inset,
-    0 8px 22px rgba(125, 211, 252, 0.22);
+    0 6px 18px rgba(125, 211, 252, 0.18);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1164,8 +1575,10 @@ img {
 
 .btn-ghost {
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1192,9 +1605,9 @@ img {
 .modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(4, 8, 16, 0.28);
-  backdrop-filter: blur(10px) saturate(116%);
-  -webkit-backdrop-filter: blur(10px) saturate(116%);
+  background: rgba(4, 8, 16, 0.22);
+  backdrop-filter: blur(12px) saturate(114%);
+  -webkit-backdrop-filter: blur(12px) saturate(114%);
   /* enter/exit via interruptible transitions in motion system */
 }
 
@@ -1287,15 +1700,17 @@ img {
   padding: 0 11px;
   border-radius: 999px;
   font-size: 0.78rem;
-  font-weight: 500;
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   transition:
     background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
     color 150ms var(--ease-out),
     transform 140ms var(--ease-out),
-    border-color 150ms var(--ease-out);
+    box-shadow 150ms var(--ease-out);
 }
 
 .preset-chip:active {
@@ -1344,28 +1759,29 @@ img {
 .toast {
   pointer-events: auto;
   border-radius: 14px;
-  padding: 12px 14px;
-  font-size: 0.88rem;
+  padding: 11px 14px;
+  font-size: 0.86rem;
   color: var(--text);
+  /* Floating glass chip — thin fill, edge defines it */
   background:
     linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.07) 0%,
-      rgba(255, 255, 255, 0.02) 100%
+      165deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.015) 100%
     ),
-    rgba(10, 14, 24, 0.28);
+    rgba(8, 12, 20, 0.22);
   backdrop-filter: blur(var(--blur)) saturate(var(--saturate));
   -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--saturate));
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    inset 0 -0.5px 0 rgba(255, 255, 255, 0.025),
-    var(--shadow-float);
-  transform: translateY(12px);
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.02),
+    0 16px 40px rgba(0, 0, 0, 0.4);
+  transform: translateY(10px);
   opacity: 0;
   transition:
-    transform 280ms var(--ease-out),
-    opacity 280ms var(--ease-out);
+    transform 240ms var(--ease-out),
+    opacity 240ms var(--ease-out);
 }
 
 .toast.is-in {
@@ -1374,9 +1790,9 @@ img {
 }
 
 .toast.is-out {
-  transform: translateY(8px);
+  transform: translateY(6px);
   opacity: 0;
-  transition-duration: 180ms;
+  transition-duration: 160ms; /* exit faster than enter */
 }
 
 /* ---------- Responsive ---------- */
@@ -1520,15 +1936,38 @@ img {
   }
 
   .list-toolbar {
-    padding: 6px var(--panel-pad-x);
-  }
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--toolbar-h);
+  padding: 6px var(--panel-pad-x);
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+}
 
   .article-card {
     padding: 10px 10px;
   }
 
   .reader-body {
-    padding: var(--space-4) var(--reader-pad-x) max(var(--space-8), env(safe-area-inset-bottom));
+    padding: var(--space-4) var(--reader-pad-x) var(--space-3);
+  }
+
+  .reader-nav {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .reader-nav-btn,
+  .reader-nav-btn.is-next {
+    text-align: left;
+    align-items: flex-start;
+  }
+
+  .reader-pos {
+    display: none;
   }
 
   .article-list {
@@ -1572,8 +2011,16 @@ img {
   }
 
   .list-toolbar {
-    gap: var(--space-2);
-  }
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--toolbar-h);
+  padding: 6px var(--panel-pad-x);
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+}
 
   .text-btn {
     padding: 6px 8px;
@@ -1629,7 +2076,9 @@ img {
 .feed-item,
 .article-card,
 .text-btn,
-.preset-chip {
+.preset-chip,
+.type-btn,
+.reader-nav-btn {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -1641,7 +2090,7 @@ img {
 
 @media (hover: hover) and (pointer: fine) {
   .brand:hover .brand-mark {
-    transform: scale(1.04) rotate(-2deg);
+    transform: scale(1.03) rotate(-1.5deg);
   }
 }
 
@@ -1659,32 +2108,30 @@ img {
   filter: brightness(0.98) blur(0.4px);
 }
 
-/* Refresh icon spin while loading 閳?state indication */
+/* Refresh icon spin while loading — state indication */
 #refreshAll svg {
   transition: transform 200ms var(--ease-out);
 }
 
 #refreshAll.is-loading svg {
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.55s linear infinite;
 }
 
-/* Page title swap 閳?prevent jarring text change */
+/* Page title swap — prevent jarring text change */
 .page-title,
 .page-sub {
   transition:
-    opacity 160ms var(--ease-out),
-    transform 160ms var(--ease-out),
-    filter 160ms var(--ease-out);
+    opacity 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
 }
 
 .page-title-wrap.is-swapping .page-title,
 .page-title-wrap.is-swapping .page-sub {
   opacity: 0;
-  transform: translateY(4px);
-  filter: blur(2px);
+  transform: translateY(3px);
 }
 
-/* Segmented control 閳?sliding pill (state indication) */
+/* Segmented control — sliding pill (state indication) */
 .seg {
   position: relative;
 }
@@ -1696,11 +2143,13 @@ img {
   left: 0;
   width: 0;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.08);
   transition:
-    transform 200ms var(--ease-out),
-    width 200ms var(--ease-out);
+    transform 180ms var(--ease-out),
+    width 180ms var(--ease-out);
   pointer-events: none;
   z-index: 0;
 }
@@ -1716,7 +2165,7 @@ img {
   background: transparent !important;
 }
 
-/* Feed active indicator 閳?soft wash, interruptible */
+/* Feed active indicator — soft wash, interruptible */
 .feed-item {
   position: relative;
 }
@@ -1726,7 +2175,7 @@ img {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(135deg, rgba(139, 219, 255, 0.12), rgba(167, 139, 250, 0.05));
+  background: linear-gradient(135deg, rgba(139, 219, 255, 0.09), rgba(167, 139, 250, 0.035));
   opacity: 0;
   transform: scale(0.98);
   transition:
@@ -1772,11 +2221,11 @@ img {
 /* Reader: interruptible open/close via transitions */
 .reader {
   opacity: 0;
-  transform: translateX(14px) scale(0.975);
+  transform: translateX(12px) scale(0.978);
   pointer-events: none;
   transition:
-    opacity 220ms var(--ease-out),
-    transform 220ms var(--ease-out);
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
   display: flex !important; /* keep in flow for transition; size gated by grid */
 }
 
@@ -1802,26 +2251,42 @@ img {
 .content.is-reader-closing .reader {
   opacity: 0;
   transform: translateX(10px) scale(0.98);
-  transition-duration: 160ms; /* exit faster */
+  transition-duration: 150ms; /* exit faster than enter */
 }
 
 .reader-body .reader-title,
 .reader-body .reader-meta,
+.reader-body .reader-stats,
 .reader-body .reader-content {
   opacity: 0;
   transform: translateY(6px);
 }
 
-.content.has-reader:not(.is-reader-closing) .reader-title {
-  animation: fadeUp 240ms var(--ease-out) 40ms forwards;
+/* First open only — delight once; skip on high-frequency article hopping */
+.content.has-reader:not(.is-reader-closing):not(.is-reader-instant) .reader-title {
+  animation: fadeUp 220ms var(--ease-out) 30ms forwards;
 }
 
-.content.has-reader:not(.is-reader-closing) .reader-meta {
-  animation: fadeUp 220ms var(--ease-out) 0ms forwards;
+.content.has-reader:not(.is-reader-closing):not(.is-reader-instant) .reader-meta {
+  animation: fadeUp 200ms var(--ease-out) 0ms forwards;
 }
 
-.content.has-reader:not(.is-reader-closing) .reader-content {
-  animation: fadeUp 260ms var(--ease-out) 70ms forwards;
+.content.has-reader:not(.is-reader-closing):not(.is-reader-instant) .reader-stats {
+  animation: fadeUp 210ms var(--ease-out) 25ms forwards;
+}
+
+.content.has-reader:not(.is-reader-closing):not(.is-reader-instant) .reader-content {
+  animation: fadeUp 240ms var(--ease-out) 55ms forwards;
+}
+
+/* Instant path: keyboard j/k and in-panel hops — no delayed content fade */
+.content.has-reader.is-reader-instant .reader-title,
+.content.has-reader.is-reader-instant .reader-meta,
+.content.has-reader.is-reader-instant .reader-stats,
+.content.has-reader.is-reader-instant .reader-content {
+  opacity: 1;
+  transform: none;
+  animation: none;
 }
 
 @keyframes fadeUp {
@@ -1858,7 +2323,7 @@ img {
   100% { transform: scale(1); }
 }
 
-/* Modal: enter ease-out, exit faster; scale 閳?0.95 */
+/* Modal: enter ease-out, exit faster; scale ≥ 0.95 */
 .modal-root {
   opacity: 0;
   pointer-events: none;
@@ -1893,10 +2358,10 @@ img {
 
 .modal {
   opacity: 0;
-  transform: scale(0.96) translateY(8px);
+  transform: scale(0.97) translateY(6px);
   transition:
-    opacity 220ms var(--ease-out),
-    transform 220ms var(--ease-out);
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
   animation: none;
 }
 
@@ -1927,15 +2392,14 @@ img {
 
 /* Status line soft crossfade */
 .status-line {
-  transition: opacity 140ms var(--ease-out), filter 140ms var(--ease-out);
+  transition: opacity 120ms var(--ease-out);
 }
 
 .status-line.is-flash {
-  opacity: 0.35;
-  filter: blur(1.5px);
+  opacity: 0.4;
 }
 
-/* Mobile sidebar drawer already uses ease-drawer 閳?ensure exit same spatial dir */
+/* Mobile sidebar drawer — ease-drawer, exit same spatial dir */
 .sidebar {
   transition:
     transform 280ms var(--ease-drawer),
@@ -1945,25 +2409,17 @@ img {
 /* Toast: enter from bottom (spatial consistency with exit) */
 .toast.is-in,
 .toast.is-out {
-  will-change: transform, opacity;
+  transform: translateY(6px);
+  opacity: 0;
+  transition-duration: 160ms; /* exit faster than enter */
 }
 
-/* Filter change: list container micro blur mask */
+/* Filter/search is high-frequency — never blur/scale the list (Emil) */
 .article-list.is-filtering {
-  filter: blur(2px);
-  opacity: 0.55;
-  transform: scale(0.995);
-  transition:
-    filter 120ms var(--ease-out),
-    opacity 120ms var(--ease-out),
-    transform 120ms var(--ease-out);
-}
-
-.article-list {
-  transition:
-    filter 160ms var(--ease-out),
-    opacity 160ms var(--ease-out),
-    transform 160ms var(--ease-out);
+  filter: none;
+  opacity: 1;
+  transform: none;
+  transition: none;
 }
 
 /* Focus ring polish */
@@ -1984,6 +2440,13 @@ input:focus:not(:focus-visible) {
 @media (prefers-reduced-motion: reduce) {
   .orb {
     animation: none !important;
+    transform: none !important;
+    opacity: 0.07 !important;
+    will-change: auto !important;
+  }
+
+  .ambient {
+    /* static depth only when reduced motion */
   }
 
   /* Shell first-paint: snap visible */
@@ -2054,6 +2517,19 @@ input:focus:not(:focus-visible) {
     opacity: 1 !important;
   }
 
+  .content.has-reader.is-reader-instant .reader-title,
+  .content.has-reader.is-reader-instant .reader-meta,
+  .content.has-reader.is-reader-instant .reader-stats,
+  .content.has-reader.is-reader-instant .reader-content {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+  }
+
+  .reader-progress-bar {
+    transition: none !important;
+  }
+
   .empty:not(.is-shown) {
     opacity: 0 !important;
   }
@@ -2063,3 +2539,12 @@ input:focus:not(:focus-visible) {
     transform: none !important;
   }
 }
+
+
+/* =========================================================
+   Polish pass · Emil craft 2026-07
+   - No blur tax on high-frequency title/status/filter
+   - Instant reader hops for keyboard / in-panel nav
+   - Faster spinner (perceived load speed)
+   - Tighter list density + quieter unread/read hierarchy
+   ========================================================= */

@@ -21,3 +21,8 @@ gh-poll.stderr
 _gh_*.py
 _run_poll.*
 upload-github.ps1
+
+# local temp patches
+_vscroll.py
+_*.py
+

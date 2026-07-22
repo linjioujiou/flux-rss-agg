@@ -5,6 +5,9 @@
 
 const STORAGE_KEY = "flux.feeds.v1";
 const STATE_KEY = "flux.state.v1";
+const PREFS_KEY = "flux.prefs.v1";
+const FONT_STEPS = [0.9, 0.95, 1, 1.08, 1.16, 1.28];
+const DEFAULT_FONT_STEP = 2;
 
 const PRESETS = [
   { name: "Hacker News", url: "https://hnrss.org/frontpage" },
@@ -29,6 +32,20 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const reduceMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+
+/** Pause ambient orbs when tab hidden — unseen perf detail */
+function bindAmbientPause() {
+  const ambient = document.querySelector(".ambient");
+  if (!ambient) return;
+  const sync = () => {
+    ambient.classList.toggle("is-paused", document.hidden || reduceMotion());
+  };
+  document.addEventListener("visibilitychange", sync);
+  // Also react to reduced-motion changes
+  const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  mq?.addEventListener?.("change", sync);
+  sync();
+}
 
 const nextFrame = () =>
   new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -61,8 +78,9 @@ function updateSegPill(animate = true) {
   pill.style.transform = `translateX(${x}px)`;
 }
 
-/** Soft crossfade page title */
+/** Soft crossfade page title — skip if unchanged (high-freq nav) */
 function setPageTitle(title, sub) {
+  if (els.pageTitle.textContent === title && els.pageSub.textContent === sub) return;
   const wrap = document.querySelector(".page-title-wrap");
   if (!wrap || reduceMotion()) {
     els.pageTitle.textContent = title;
@@ -74,7 +92,7 @@ function setPageTitle(title, sub) {
     els.pageTitle.textContent = title;
     els.pageSub.textContent = sub;
     wrap.classList.remove("is-swapping");
-  }, 120);
+  }, 90);
 }
 
 const els = {
@@ -98,10 +116,22 @@ const els = {
   reader: $("#reader"),
   closeReader: $("#closeReader"),
   starBtn: $("#starBtn"),
+  markUnreadBtn: $("#markUnreadBtn"),
+  copyLinkBtn: $("#copyLinkBtn"),
   openOriginal: $("#openOriginal"),
+  fontDec: $("#fontDec"),
+  fontInc: $("#fontInc"),
+  readerProgress: $("#readerProgress"),
+  readerPos: $("#readerPos"),
   readerMeta: $("#readerMeta"),
   readerTitle: $("#readerTitle"),
+  readerStats: $("#readerStats"),
   readerContent: $("#readerContent"),
+  readerBody: $("#readerBody"),
+  prevArticle: $("#prevArticle"),
+  nextArticle: $("#nextArticle"),
+  prevTitle: $("#prevTitle"),
+  nextTitle: $("#nextTitle"),
   modalRoot: $("#modalRoot"),
   modalBackdrop: $("#modalBackdrop"),
   closeModal: $("#closeModal"),
@@ -131,6 +161,19 @@ const state = {
   /** @type {string|null} */
   activeArticleId: null,
   loading: false,
+  /** font step index into FONT_STEPS */
+  fontStep: DEFAULT_FONT_STEP,
+  _progressRaf: 0,
+  /** Virtual list cache */
+  _vlist: {
+    items: /** @type {Article[]} */ ([]),
+    start: 0,
+    end: 0,
+    row: 88,
+    overscan: 10,
+    bound: false,
+    raf: 0,
+  },
 };
 
 /* ---------- Storage ---------- */
@@ -148,6 +191,15 @@ function loadPersisted() {
   } catch {
     /* ignore */
   }
+  try {
+    const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    const step = Number(prefs.fontStep);
+    if (Number.isInteger(step) && step >= 0 && step < FONT_STEPS.length) {
+      state.fontStep = step;
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 function saveFeeds() {
@@ -160,6 +212,15 @@ function saveState() {
     JSON.stringify({
       readIds: [...state.readIds].slice(-2000),
       starredIds: [...state.starredIds].slice(-500),
+    })
+  );
+}
+
+function savePrefs() {
+  localStorage.setItem(
+    PREFS_KEY,
+    JSON.stringify({
+      fontStep: state.fontStep,
     })
   );
 }
@@ -255,6 +316,173 @@ function formatTime(ts) {
   return d.toLocaleDateString("zh-CN", { year: "numeric", month: "short", day: "numeric" });
 }
 
+
+function estimateReadMinutes(text) {
+  const plain = stripHtml(text || "");
+  if (!plain) return 1;
+  const cjk = (plain.match(/[\u4e00-\u9fff]/g) || []).length;
+  const other = Math.max(0, plain.length - cjk);
+  const minutes = cjk / 320 + other / 900;
+  return Math.max(1, Math.round(minutes));
+}
+
+function wordCountLabel(text) {
+  const plain = stripHtml(text || "");
+  if (!plain) return "0 字";
+  const cjk = (plain.match(/[\u4e00-\u9fff]/g) || []).length;
+  const words = (plain.match(/[A-Za-z0-9]+/g) || []).length;
+  if (cjk > words * 2) return `${plain.replace(/\s+/g, "").length} 字`;
+  return words ? `${words} 词` : `${plain.length} 字`;
+}
+
+function applyFontScale() {
+  const scale = FONT_STEPS[state.fontStep] ?? 1;
+  const root = els.reader || document.querySelector(".reader");
+  if (!root) return;
+  root.style.setProperty("--reader-font", `${scale}rem`);
+  root.style.setProperty("--reader-line", scale >= 1.16 ? "1.8" : "1.75");
+  if (els.fontDec) els.fontDec.disabled = state.fontStep <= 0;
+  if (els.fontInc) els.fontInc.disabled = state.fontStep >= FONT_STEPS.length - 1;
+}
+
+function changeFont(delta) {
+  const next = Math.min(FONT_STEPS.length - 1, Math.max(0, state.fontStep + delta));
+  if (next === state.fontStep) return;
+  state.fontStep = next;
+  savePrefs();
+  applyFontScale();
+}
+
+function updateReaderProgress() {
+  if (!els.readerBody || !els.readerProgress) return;
+  const el = els.readerBody;
+  const max = el.scrollHeight - el.clientHeight;
+  const pct = max <= 0 ? 100 : Math.min(100, Math.max(0, (el.scrollTop / max) * 100));
+  els.readerProgress.style.width = `${pct}%`;
+}
+
+function bindReaderScroll() {
+  if (!els.readerBody || els.readerBody.dataset.progressBound === "1") return;
+  els.readerBody.dataset.progressBound = "1";
+  els.readerBody.addEventListener(
+    "scroll",
+    () => {
+      if (state._progressRaf) return;
+      state._progressRaf = requestAnimationFrame(() => {
+        state._progressRaf = 0;
+        updateReaderProgress();
+      });
+    },
+    { passive: true }
+  );
+}
+
+function neighborArticles(id = state.activeArticleId) {
+  const list = filteredArticles();
+  const idx = list.findIndex((a) => a.id === id);
+  return {
+    list,
+    index: idx,
+    prev: idx > 0 ? list[idx - 1] : null,
+    next: idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null,
+  };
+}
+
+function updateReaderChrome(article) {
+  const { list, index, prev, next } = neighborArticles(article?.id);
+  if (els.readerPos) {
+    els.readerPos.textContent =
+      index >= 0 ? `${index + 1} / ${Math.min(list.length, 200)}` : "—";
+  }
+  if (els.readerStats && article) {
+    const mins = estimateReadMinutes(article.content || article.snippet);
+    const count = wordCountLabel(article.content || article.snippet);
+    const time = formatTime(article.publishedAt);
+    els.readerStats.innerHTML = [
+      `<span>${escapeHtml(String(mins))} 分钟阅读</span>`,
+      `<span class="stat-sep">·</span>`,
+      `<span>${escapeHtml(count)}</span>`,
+      time ? `<span class="stat-sep">·</span><span>${escapeHtml(time)}</span>` : "",
+    ].join("");
+  }
+  if (els.prevArticle) {
+    els.prevArticle.disabled = !prev;
+    if (els.prevTitle) els.prevTitle.textContent = prev ? prev.title : "没有更多了";
+  }
+  if (els.nextArticle) {
+    els.nextArticle.disabled = !next;
+    if (els.nextTitle) els.nextTitle.textContent = next ? next.title : "没有更多了";
+  }
+}
+
+function goNeighbor(dir) {
+  if (!state.activeArticleId) return;
+  const { prev, next } = neighborArticles();
+  const target = dir < 0 ? prev : next;
+  if (!target) {
+    toast(dir < 0 ? "已是第一篇" : "已是最后一篇");
+    return;
+  }
+  openReader(target.id, { fromKeyboard: true });
+}
+
+function toggleStarActive() {
+  if (!state.activeArticleId) return;
+  if (state.starredIds.has(state.activeArticleId)) {
+    state.starredIds.delete(state.activeArticleId);
+    toast("已取消收藏");
+  } else {
+    state.starredIds.add(state.activeArticleId);
+    toast("已收藏");
+  }
+  saveState();
+  const starred = state.starredIds.has(state.activeArticleId);
+  els.starBtn.classList.toggle("star-btn-on", starred);
+  els.starBtn.setAttribute("aria-pressed", starred ? "true" : "false");
+  if (!reduceMotion()) {
+    els.starBtn.classList.remove("is-pop");
+    void els.starBtn.offsetWidth;
+    els.starBtn.classList.add("is-pop");
+  }
+  renderList({ animate: false, keepScroll: true });
+  const article = state.articles.find((a) => a.id === state.activeArticleId);
+  if (article) updateReaderChrome(article);
+}
+
+function markActiveUnread() {
+  if (!state.activeArticleId) return;
+  state.readIds.delete(state.activeArticleId);
+  saveState();
+  renderNav();
+  renderList({ animate: false, keepScroll: true });
+  toast("已标为未读");
+}
+
+async function copyActiveLink() {
+  const article = state.articles.find((a) => a.id === state.activeArticleId);
+  if (!article?.link) {
+    toast("没有可复制的链接");
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(article.link);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = article.link;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    toast("链接已复制");
+  } catch {
+    toast("复制失败");
+  }
+}
+
 function articleKey(feedId, link, title, publishedAt) {
   const base = `${feedId}|${link || ""}|${title || ""}|${publishedAt || ""}`;
   // short stable-ish hash
@@ -273,8 +501,8 @@ function toast(message) {
   els.toastRoot.appendChild(el);
   requestAnimationFrame(() => el.classList.add("is-in"));
   // Enter ~280ms feel; exit faster (Emil: exit quicker than enter)
-  const hold = reduceMotion() ? 1800 : 2400;
-  const outMs = reduceMotion() ? 0 : 160;
+  const hold = reduceMotion() ? 1600 : 2200;
+  const outMs = reduceMotion() ? 0 : 140;
   setTimeout(() => {
     el.classList.add("is-out");
     el.classList.remove("is-in");
@@ -283,13 +511,26 @@ function toast(message) {
 }
 
 /* ---------- API ---------- */
-async function fetchFeed(url) {
-  const res = await fetch(`/api/rss?url=${encodeURIComponent(url)}`);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || `请求失败 (${res.status})`);
+async function fetchFeed(url, { timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`/api/rss?url=${encodeURIComponent(url)}`, {
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `请求失败 (${res.status})`);
+    }
+    return data;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error("请求超时，请稍后重试");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 /* ---------- Feed ops ---------- */
@@ -360,41 +601,57 @@ async function refreshAll() {
     toast("还没有订阅源");
     return;
   }
+  if (state.loading) return; // prevent double-trigger spinner lock
   state.loading = true;
   renderLoading();
   setStatus("正在刷新全部订阅…");
   let ok = 0;
   let fail = 0;
-  await Promise.all(
-    state.feeds.map(async (feed) => {
-      try {
-        const data = await fetchFeed(feed.url);
-        if (data.title && data.title !== feed.title && !feed.title) {
-          feed.title = data.title;
+  try {
+    // Limit concurrency so one stuck host cannot stall the whole UI forever
+    const queue = [...state.feeds];
+    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+      while (queue.length) {
+        const feed = queue.shift();
+        if (!feed) break;
+        try {
+          const data = await fetchFeed(feed.url, { timeoutMs: 15000 });
+          if (data.title && data.title !== feed.title && !feed.title) {
+            feed.title = data.title;
+          }
+          // Keep user-chosen title; only fill empty
+          if (data.title && feed.title.startsWith("http")) {
+            feed.title = data.title;
+            saveFeeds();
+          }
+          mergeArticles(feed, data.items || []);
+          ok++;
+          setStatus(`正在刷新… ${ok + fail}/${state.feeds.length}`);
+        } catch (err) {
+          console.warn("refresh fail", feed.url, err);
+          fail++;
+          setStatus(`正在刷新… ${ok + fail}/${state.feeds.length}`);
         }
-        // Keep user-chosen title; only fill empty
-        if (data.title && feed.title.startsWith("http")) {
-          feed.title = data.title;
-          saveFeeds();
-        }
-        mergeArticles(feed, data.items || []);
-        ok++;
-      } catch (err) {
-        console.warn("refresh fail", feed.url, err);
-        fail++;
       }
-    })
-  );
-  state.loading = false;
-  renderLoading();
-  renderNav();
-  renderList({ animate: true });
-  setStatus(
-    fail
-      ? `刷新完成：${ok} 成功，${fail} 失败`
-      : `已更新 ${ok} 个订阅 · ${state.articles.length} 篇文章`
-  );
-  toast(fail ? `部分订阅刷新失败 (${fail})` : "全部订阅已刷新");
+    });
+    await Promise.all(workers);
+    saveFeeds();
+    renderNav();
+    renderList({ animate: true });
+    setStatus(
+      fail
+        ? `刷新完成：${ok} 成功，${fail} 失败`
+        : `已更新 ${ok} 个订阅 · ${state.articles.length} 篇文章`
+    );
+    toast(fail ? `部分订阅刷新失败 (${fail})` : "全部订阅已刷新");
+  } catch (err) {
+    console.error("refreshAll fatal", err);
+    setStatus("刷新失败，请重试");
+    toast(err?.message || "刷新失败");
+  } finally {
+    state.loading = false;
+    renderLoading();
+  }
 }
 
 /* ---------- Filtering ---------- */
@@ -422,15 +679,19 @@ function filteredArticles() {
 
 /* ---------- Render ---------- */
 function setStatus(text) {
-  if (reduceMotion()) {
+  if (!els.statusLine) return;
+  if (els.statusLine.textContent === text) return;
+  // Progress strings during refresh are high-frequency — snap, no flash
+  if (state.loading || reduceMotion()) {
     els.statusLine.textContent = text;
+    els.statusLine.classList.remove("is-flash");
     return;
   }
   els.statusLine.classList.add("is-flash");
   window.setTimeout(() => {
     els.statusLine.textContent = text;
     els.statusLine.classList.remove("is-flash");
-  }, 90);
+  }, 70);
 }
 
 function renderNav() {
@@ -479,51 +740,68 @@ function renderNav() {
   setPageTitle(title, sub);
 }
 
-function renderList({ animate = true } = {}) {
-  const list = filteredArticles();
-  els.articleList.innerHTML = "";
 
-  const noFeeds = state.feeds.length === 0;
-  els.emptyState.hidden = !noFeeds;
-  if (!noFeeds) {
-    els.emptyState.classList.remove("is-shown");
-  } else {
-    requestAnimationFrame(() => els.emptyState.classList.add("is-shown"));
+/* ---------- Virtual list (Emil: high-freq scroll = no animation) ---------- */
+function measureRowHeight() {
+  const windowEl = els.articleList?.querySelector(".vlist-window");
+  const cards = windowEl ? [...windowEl.querySelectorAll(".article-card")] : [];
+  if (cards.length >= 2) {
+    const first = cards[0].getBoundingClientRect();
+    const last = cards[cards.length - 1].getBoundingClientRect();
+    const avg = (last.bottom - first.top) / cards.length;
+    if (avg > 48 && avg < 180) return Math.round(avg);
   }
-  if (noFeeds) {
-    els.articleList.hidden = true;
-    return;
+  if (cards.length === 1) {
+    const h = cards[0].getBoundingClientRect().height + 2;
+    if (h > 48 && h < 180) return Math.round(h);
   }
-  els.articleList.hidden = false;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--vrow").trim();
+  const fromCss = parseFloat(raw);
+  if (fromCss > 40) return fromCss;
+  return 88;
+}
 
-  if (!list.length) {
-    els.articleList.innerHTML = `
-      <div style="padding:40px 16px;text-align:center;color:var(--text-3);font-size:0.9rem">
-        没有匹配的文章
-      </div>`;
-    return;
+function ensureVirtualListBound() {
+  if (!els.articleList || state._vlist.bound) return;
+  state._vlist.bound = true;
+  const onScroll = () => {
+    if (state._vlist.raf) return;
+    state._vlist.raf = requestAnimationFrame(() => {
+      state._vlist.raf = 0;
+      paintVirtualWindow({ animate: false });
+    });
+  };
+  els.articleList.addEventListener("scroll", onScroll, { passive: true });
+  // Resize: re-measure row + repaint window (high-freq → no animation)
+  if (typeof ResizeObserver !== "undefined") {
+    let roRaf = 0;
+    const ro = new ResizeObserver(() => {
+      if (roRaf) return;
+      roRaf = requestAnimationFrame(() => {
+        roRaf = 0;
+        const next = measureRowHeight();
+        if (Math.abs(next - (state._vlist.row || 0)) >= 2) {
+          state._vlist.row = next;
+          document.documentElement.style.setProperty("--vrow", `${next}px`);
+          delete els.articleList.dataset.vRow;
+          delete els.articleList.dataset.vCalibrated;
+        }
+        paintVirtualWindow({ animate: false });
+      });
+    });
+    ro.observe(els.articleList);
   }
+}
 
-  const shouldAnimate = animate && !reduceMotion();
-  els.articleList.classList.toggle("is-animating", shouldAnimate);
-  if (shouldAnimate) {
-    // clear animating after stagger finishes so re-renders don't re-stagger always
-    window.clearTimeout(renderList._t);
-    renderList._t = window.setTimeout(() => {
-      els.articleList.classList.remove("is-animating");
-    }, 360);
-  }
-
-  const frag = document.createDocumentFragment();
-  for (const a of list.slice(0, 200)) {
-    const isRead = state.readIds.has(a.id);
-    const isStar = state.starredIds.has(a.id);
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = `article-card${state.activeArticleId === a.id ? " is-active" : ""}${isRead ? " is-read" : ""}`;
-    card.dataset.id = a.id;
-    card.setAttribute("role", "listitem");
-    card.innerHTML = `
+function createArticleCard(a) {
+  const isRead = state.readIds.has(a.id);
+  const isStar = state.starredIds.has(a.id);
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = `article-card${state.activeArticleId === a.id ? " is-active" : ""}${isRead ? " is-read" : ""}`;
+  card.dataset.id = a.id;
+  card.setAttribute("role", "listitem");
+  card.innerHTML = `
       <div class="article-main">
         <div class="article-source">
           <span class="source-dot" style="background:${a.feedColor}"></span>
@@ -538,28 +816,218 @@ function renderList({ animate = true } = {}) {
         ${!isRead ? '<span class="unread-pip" aria-label="未读"></span>' : ""}
       </div>
     `;
-    frag.appendChild(card);
+  return card;
+}
+
+function paintVirtualWindow({ animate = false } = {}) {
+  const list = state._vlist.items;
+  const scroller = els.articleList;
+  if (!scroller || !list) return;
+
+  if (!list.length) {
+    scroller.innerHTML = `<div class="vlist-empty">没有匹配的文章</div>`;
+    state._vlist.start = 0;
+    state._vlist.end = 0;
+    return;
   }
-  els.articleList.appendChild(frag);
+
+  const row = state._vlist.row || measureRowHeight();
+  state._vlist.row = row;
+  const overscan = state._vlist.overscan;
+  const scrollTop = scroller.scrollTop;
+  const viewH = scroller.clientHeight || 600;
+  const total = list.length;
+
+  let start = Math.floor(scrollTop / row) - overscan;
+  if (start < 0) start = 0;
+  let end = Math.ceil((scrollTop + viewH) / row) + overscan;
+  if (end > total) end = total;
+  if (end < start) end = start;
+
+  // Skip DOM work if window unchanged and not forced rebuild
+  const sameWindow =
+    scroller.dataset.vStart === String(start) &&
+    scroller.dataset.vEnd === String(end) &&
+    scroller.dataset.vLen === String(total) &&
+    scroller.dataset.vRow === String(row) &&
+    !animate &&
+    scroller.querySelector(".vlist-window");
+
+  // Still need active/read class updates when state changes — detect via signature
+  const sig = `${state.activeArticleId || ""}|${state.readIds.size}|${state.starredIds.size}|${state.filter}|${state.query}|${state.activeFeedId}`;
+  const sameSig = scroller.dataset.vSig === sig;
+  if (sameWindow && sameSig) return;
+
+  state._vlist.start = start;
+  state._vlist.end = end;
+  scroller.dataset.vStart = String(start);
+  scroller.dataset.vEnd = String(end);
+  scroller.dataset.vLen = String(total);
+  scroller.dataset.vRow = String(row);
+  scroller.dataset.vSig = sig;
+
+  const topH = start * row;
+  const bottomH = Math.max(0, (total - end) * row);
+
+  const shouldAnimate = animate && !reduceMotion() && start === 0;
+  scroller.classList.toggle("is-animating", shouldAnimate);
+  if (shouldAnimate) {
+    window.clearTimeout(renderList._t);
+    renderList._t = window.setTimeout(() => {
+      scroller.classList.remove("is-animating");
+    }, 360);
+  }
+
+  const frag = document.createDocumentFragment();
+
+  const top = document.createElement("div");
+  top.className = "vlist-spacer-top";
+  top.style.height = `${topH}px`;
+  top.setAttribute("aria-hidden", "true");
+  frag.appendChild(top);
+
+  const windowEl = document.createElement("div");
+  windowEl.className = "vlist-window";
+  windowEl.setAttribute("role", "presentation");
+  for (let i = start; i < end; i++) {
+    windowEl.appendChild(createArticleCard(list[i]));
+  }
+  frag.appendChild(windowEl);
+
+  const bottom = document.createElement("div");
+  bottom.className = "vlist-spacer-bottom";
+  bottom.style.height = `${bottomH}px`;
+  bottom.setAttribute("aria-hidden", "true");
+  frag.appendChild(bottom);
+
+  scroller.replaceChildren(frag);
+
+  if (!scroller.dataset.vCalibrated) {
+    requestAnimationFrame(() => {
+      const measured = measureRowHeight();
+      if (Math.abs(measured - row) >= 4) {
+        state._vlist.row = measured;
+        document.documentElement.style.setProperty("--vrow", `${measured}px`);
+        scroller.dataset.vCalibrated = "1";
+        delete scroller.dataset.vRow;
+        paintVirtualWindow({ animate: false });
+      } else {
+        scroller.dataset.vCalibrated = "1";
+      }
+    });
+  }
+}
+
+function scrollVirtualToId(id, { align = "nearest" } = {}) {
+  const list = state._vlist.items;
+  const idx = list.findIndex((a) => a.id === id);
+  if (idx < 0 || !els.articleList) return;
+  const row = state._vlist.row || measureRowHeight();
+  const scroller = els.articleList;
+  const top = idx * row;
+  const bottom = top + row;
+  const viewTop = scroller.scrollTop;
+  const viewBottom = viewTop + scroller.clientHeight;
+
+  let next = scroller.scrollTop;
+  if (align === "start" || top < viewTop) {
+    next = Math.max(0, top - 8);
+  } else if (bottom > viewBottom) {
+    next = Math.max(0, bottom - scroller.clientHeight + 8);
+  } else {
+    // already visible — still paint so active class updates
+    paintVirtualWindow({ animate: false });
+    return;
+  }
+  // High-frequency list nav: no smooth scroll (Emil)
+  scroller.scrollTop = next;
+  paintVirtualWindow({ animate: false });
+}
+
+function renderList({ animate = true, keepScroll = false } = {}) {
+  const list = filteredArticles();
+  ensureVirtualListBound();
+  state._vlist.items = list;
+  state._vlist.row = measureRowHeight();
+
+  const noFeeds = state.feeds.length === 0;
+  els.emptyState.hidden = !noFeeds;
+  if (!noFeeds) {
+    els.emptyState.classList.remove("is-shown");
+  } else {
+    requestAnimationFrame(() => els.emptyState.classList.add("is-shown"));
+  }
+  if (noFeeds) {
+    els.articleList.hidden = true;
+    els.articleList.replaceChildren();
+    delete els.articleList.dataset.vStart;
+    delete els.articleList.dataset.vEnd;
+    delete els.articleList.dataset.vLen;
+    delete els.articleList.dataset.vRow;
+    delete els.articleList.dataset.vSig;
+    delete els.articleList.dataset.vCalibrated;
+    state._vlist.items = [];
+    return;
+  }
+  els.articleList.hidden = false;
+
+  // Filter/search/nav: reset to top unless keepScroll (e.g. star toggle)
+  if (!keepScroll && animate !== false) {
+    // only jump to top when data set identity likely changed
+  }
+  // Heuristic: if previous length differed a lot or filter changed via animate:true, reset
+  if (animate && !keepScroll) {
+    els.articleList.scrollTop = 0;
+  }
+
+  delete els.articleList.dataset.vSig;
+  if (els.articleList.dataset.vLen && els.articleList.dataset.vLen !== String(list.length)) {
+    delete els.articleList.dataset.vCalibrated;
+  }
+  paintVirtualWindow({ animate: Boolean(animate) && !keepScroll });
+
+  // Keep reader chrome (pos / neighbors) in sync with current filter
+  if (state.activeArticleId) {
+    const art = state.articles.find((a) => a.id === state.activeArticleId);
+    if (art) updateReaderChrome(art);
+  }
 }
 
 function renderLoading() {
-  els.loadingState.hidden = !state.loading;
-  els.refreshAll.disabled = state.loading;
-  els.refreshAll.classList.toggle("is-loading", state.loading);
+  if (els.loadingState) {
+    els.loadingState.hidden = !state.loading;
+    // Belt-and-suspenders: class + attribute (CSS must not keep display:flex forever)
+    els.loadingState.classList.toggle("is-visible", state.loading);
+    if (state.loading) {
+      els.loadingState.removeAttribute("hidden");
+    } else {
+      els.loadingState.setAttribute("hidden", "");
+    }
+  }
+  if (els.refreshAll) {
+    els.refreshAll.disabled = state.loading;
+    els.refreshAll.classList.toggle("is-loading", state.loading);
+  }
 }
 
-function openReader(id) {
+function openReader(id, opts = {}) {
   const article = state.articles.find((a) => a.id === id);
   if (!article) return;
 
+  const wasOpen = Boolean(state.activeArticleId);
+  // High-frequency hops (j/k, list while open): no content fade delay
+  const instant = Boolean(opts.instant || opts.fromKeyboard || wasOpen);
   state.activeArticleId = id;
   state.readIds.add(id);
   saveState();
 
   els.content.classList.remove("is-reader-closing");
   els.content.classList.add("has-reader");
+  els.content.classList.toggle("is-reader-instant", instant);
   els.reader.setAttribute("aria-hidden", "false");
+  applyFontScale();
+  bindReaderScroll();
+
   els.readerTitle.textContent = article.title;
   els.readerMeta.innerHTML = `
     <span style="display:inline-flex;align-items:center;gap:6px">
@@ -567,32 +1035,55 @@ function openReader(id) {
       ${escapeHtml(article.feedTitle)}
     </span>
     ${article.author ? `<span>· ${escapeHtml(article.author)}</span>` : ""}
-    ${article.publishedAt ? `<span>· ${escapeHtml(formatTime(article.publishedAt))}</span>` : ""}
   `;
+
   const body = article.content || article.snippet || "";
-  els.readerContent.innerHTML = sanitizeHtml(body) || "<p>暂无正文，请打开原文阅读。</p>";
+  const safe = sanitizeHtml(body);
+  if (safe && stripHtml(safe).length > 0) {
+    els.readerContent.innerHTML = safe;
+  } else {
+    const link = article.link
+      ? `<a href="${escapeHtml(article.link)}" target="_blank" rel="noopener noreferrer">打开原文阅读</a>`
+      : "暂无正文";
+    els.readerContent.innerHTML = `<div class="reader-empty-hint">这篇订阅未提供完整正文。${link}</div>`;
+  }
+
   els.openOriginal.href = article.link || "#";
   els.openOriginal.style.visibility = article.link ? "visible" : "hidden";
+  if (els.copyLinkBtn) els.copyLinkBtn.disabled = !article.link;
 
   const starred = state.starredIds.has(id);
   els.starBtn.classList.toggle("star-btn-on", starred);
   els.starBtn.setAttribute("aria-pressed", starred ? "true" : "false");
 
+  updateReaderChrome(article);
+
+  // Reset scroll instantly — high-frequency list navigation (Emil: no smooth)
+  if (els.readerBody) {
+    els.readerBody.scrollTop = 0;
+  }
+  updateReaderProgress();
+
   renderNav();
   renderList({ animate: false });
+
+  // Bring active card into view without smooth scrolling (frequent / virtual)
+  scrollVirtualToId(id, { align: "nearest" });
 }
 
 async function closeReader() {
   state.activeArticleId = null;
   els.reader.setAttribute("aria-hidden", "true");
+  if (els.readerProgress) els.readerProgress.style.width = "0%";
+  if (els.readerPos) els.readerPos.textContent = "—";
   if (reduceMotion()) {
-    els.content.classList.remove("has-reader", "is-reader-closing");
+    els.content.classList.remove("has-reader", "is-reader-closing", "is-reader-instant");
     renderList({ animate: false });
     return;
   }
   els.content.classList.add("is-reader-closing");
-  await wait(160);
-  els.content.classList.remove("has-reader", "is-reader-closing");
+  await wait(150); // match exit duration
+  els.content.classList.remove("has-reader", "is-reader-closing", "is-reader-instant");
   renderList({ animate: false });
 }
 
@@ -692,47 +1183,36 @@ function bindEvents() {
     state.activeFeedId = item.dataset.id;
     closeReader();
     renderNav();
-    // Feed switching is frequent navigation — no list stagger
-    renderList({ animate: false });
+    // Feed switching is frequent — no stagger; jump list to top
+    els.articleList.scrollTop = 0;
+    renderList({ animate: false, keepScroll: true });
     closeMobileSidebar();
   });
 
   els.articleList.addEventListener("click", (e) => {
     const card = e.target.closest(".article-card[data-id]");
     if (!card) return;
-    openReader(card.dataset.id);
+    openReader(card.dataset.id, {
+      instant: Boolean(state.activeArticleId),
+    });
   });
 
   els.closeReader.addEventListener("click", closeReader);
 
-  els.starBtn.addEventListener("click", () => {
-    if (!state.activeArticleId) return;
-    if (state.starredIds.has(state.activeArticleId)) {
-      state.starredIds.delete(state.activeArticleId);
-      toast("已取消收藏");
-    } else {
-      state.starredIds.add(state.activeArticleId);
-      toast("已收藏");
-    }
-    saveState();
-    const starred = state.starredIds.has(state.activeArticleId);
-    els.starBtn.classList.toggle("star-btn-on", starred);
-    // Feedback pop — occasional action
-    if (!reduceMotion()) {
-      els.starBtn.classList.remove("is-pop");
-      // reflow to restart animation
-      void els.starBtn.offsetWidth;
-      els.starBtn.classList.add("is-pop");
-    }
-    renderList({ animate: false });
-  });
+  els.starBtn.addEventListener("click", () => toggleStarActive());
+  els.markUnreadBtn?.addEventListener("click", () => markActiveUnread());
+  els.copyLinkBtn?.addEventListener("click", () => copyActiveLink());
+  els.fontDec?.addEventListener("click", () => changeFont(-1));
+  els.fontInc?.addEventListener("click", () => changeFont(1));
+  els.prevArticle?.addEventListener("click", () => goNeighbor(-1));
+  els.nextArticle?.addEventListener("click", () => goNeighbor(1));
 
   els.markAllRead.addEventListener("click", () => {
     const list = filteredArticles();
     for (const a of list) state.readIds.add(a.id);
     saveState();
     renderNav();
-    renderList({ animate: false });
+    renderList({ animate: false, keepScroll: true });
     toast("已全部标为已读");
   });
 
@@ -742,8 +1222,9 @@ function bindEvents() {
       btn.classList.add("is-active");
       state.filter = btn.dataset.filter;
       updateSegPill(true);
-      // Filter is frequent list navigation — pill moves; list does not restagger
-      renderList({ animate: false });
+      // Filter is frequent — pill moves; list snaps top, no stagger
+      els.articleList.scrollTop = 0;
+      renderList({ animate: false, keepScroll: true });
     });
   });
 
@@ -752,14 +1233,15 @@ function bindEvents() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.query = els.searchInput.value;
-      // Search is high-frequency — no list stagger (Emil)
-      renderList({ animate: false });
+      // Search is high-frequency — no list stagger; keep relative top
+      els.articleList.scrollTop = 0;
+      renderList({ animate: false, keepScroll: true });
     }, 120);
   });
 
   window.addEventListener("resize", () => updateSegPill(false));
 
-  // Keyboard: "/" focuses search without animation (high frequency)
+  // Keyboard: high-frequency actions stay instant (Emil)
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       if (!els.modalRoot.hidden) {
@@ -773,12 +1255,77 @@ function bindEvents() {
       closeMobileSidebar();
       return;
     }
+
     const tag = document.activeElement?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (e.key === "/" ) {
+    const typing =
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      document.activeElement?.isContentEditable;
+    if (typing) return;
+
+    if (e.key === "/") {
       e.preventDefault();
       els.searchInput.focus();
       els.searchInput.select();
+      return;
+    }
+
+    // Reader-only shortcuts — no animation delay
+    if (state.activeArticleId) {
+      if (e.key === "j" || e.key === "J" || e.key === "ArrowDown") {
+        e.preventDefault();
+        goNeighbor(1);
+        return;
+      }
+      if (e.key === "k" || e.key === "K" || e.key === "ArrowUp") {
+        e.preventDefault();
+        goNeighbor(-1);
+        return;
+      }
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        toggleStarActive();
+        return;
+      }
+      if (e.key === "u" || e.key === "U") {
+        e.preventDefault();
+        markActiveUnread();
+        return;
+      }
+      if (e.key === "o" || e.key === "O") {
+        e.preventDefault();
+        if (els.openOriginal?.href && els.openOriginal.href !== "#") {
+          window.open(els.openOriginal.href, "_blank", "noopener,noreferrer");
+        }
+        return;
+      }
+      if (e.key === "[") {
+        e.preventDefault();
+        changeFont(-1);
+        return;
+      }
+      if (e.key === "]") {
+        e.preventDefault();
+        changeFont(1);
+        return;
+      }
+      if (e.key === " " || e.key === "Spacebar") {
+        // Space scrolls reader body; prevent page jump
+        if (els.readerBody) {
+          e.preventDefault();
+          const page = Math.max(240, els.readerBody.clientHeight * 0.9);
+          els.readerBody.scrollTop += e.shiftKey ? -page : page;
+          updateReaderProgress();
+        }
+        return;
+      }
+    } else if (e.key === "Enter" || e.key === "j" || e.key === "J") {
+      // List: open top visible article (vim-style j when nothing open)
+      const first = filteredArticles()[0];
+      if (first) {
+        e.preventDefault();
+        openReader(first.id, { fromKeyboard: true });
+      }
     }
   });
 
@@ -808,6 +1355,10 @@ async function boot() {
   loadPersisted();
   renderPresets();
   bindEvents();
+  applyFontScale();
+  bindReaderScroll();
+  ensureVirtualListBound();
+  bindAmbientPause();
   renderNav();
   renderList({ animate: true });
   renderLoading();
