@@ -26,3 +26,7 @@ upload-github.ps1
 _vscroll.py
 _*.py
 
+
+git-push.log
+git-push.err
+
