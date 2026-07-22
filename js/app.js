@@ -47,6 +47,71 @@ function bindAmbientPause() {
   sync();
 }
 
+
+/**
+ * Bing daily photo as ambient field.
+ * Decorative only — preload then fade in (Emil: rare surface, quiet delight).
+ * API returns raw JPEG; browser paints it as CSS background (no CORS needed).
+ * Fail closed: keep gradient field, no error chrome.
+ */
+const BING_DAILY_URL = "https://uapis.cn/api/v1/image/bing-daily";
+
+function loadBingDailyBg() {
+  const ambient = document.querySelector(".ambient");
+  const el = document.getElementById("bingBg");
+  if (!ambient || !el) return;
+
+  // Local-day key so cache-bust matches user's calendar, not UTC midnight
+  const now = new Date();
+  const dayKey = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  const url = `${BING_DAILY_URL}?d=${encodeURIComponent(dayKey)}`;
+
+  const settle = () => {
+    // Drop will-change after first paint so compositor stays quiet (always-on surface)
+    el.addEventListener(
+      "transitionend",
+      (e) => {
+        if (e.propertyName === "opacity") el.style.willChange = "auto";
+      },
+      { once: true }
+    );
+  };
+
+  const reveal = () => {
+    el.style.backgroundImage = `url("${url}")`;
+    // Double-rAF: ensure backgroundImage is committed before opacity class
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        ambient.classList.add("has-bing");
+        settle();
+      });
+    });
+  };
+
+  const img = new Image();
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.onload = () => {
+    // decode() when available — avoids flash of incomplete paint
+    const done = () => reveal();
+    if (typeof img.decode === "function") {
+      img.decode().then(done).catch(done);
+    } else {
+      done();
+    }
+  };
+  img.onerror = () => {
+    ambient.classList.remove("has-bing");
+    el.style.backgroundImage = "";
+    el.style.willChange = "auto";
+  };
+  img.src = url;
+}
+
 const nextFrame = () =>
   new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
@@ -1688,6 +1753,7 @@ async function boot() {
   bindReaderScroll();
   ensureVirtualListBound();
   bindAmbientPause();
+  loadBingDailyBg();
   renderNav();
   renderList({ animate: true });
   renderLoading();

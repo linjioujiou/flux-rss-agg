@@ -12,12 +12,12 @@
   --line: rgba(255, 255, 255, 0.09);
   --line-2: rgba(255, 255, 255, 0.13);
   /* Glass fills stay thin — edge/specular carry the material (Emil) */
-  --glass: rgba(255, 255, 255, 0.018);
-  --glass-strong: rgba(255, 255, 255, 0.036);
-  --glass-inset: rgba(255, 255, 255, 0.022);
-  --glass-edge: rgba(255, 255, 255, 0.14);
-  --glass-edge-soft: rgba(255, 255, 255, 0.08);
-  --glass-specular: rgba(255, 255, 255, 0.22);
+  --glass: rgba(255, 255, 255, 0.012);
+  --glass-strong: rgba(255, 255, 255, 0.028);
+  --glass-inset: rgba(8, 12, 20, 0.34);
+  --glass-edge: rgba(255, 255, 255, 0.18);
+  --glass-edge-soft: rgba(255, 255, 255, 0.11);
+  --glass-specular: rgba(255, 255, 255, 0.34);
   --accent: #8bdbff;
   --accent-2: #b39cff;
   --accent-soft: rgba(139, 219, 255, 0.14);
@@ -45,12 +45,12 @@
   --reader-pad-x: 24px;
   --toolbar-h: 40px;
   --vrow: 88px; /* virtual list estimated row height */
-  /* Edge light > fill. Outer drop is soft so glass doesn't feel heavy. */
+  /* Edge light > fill. Soft lift separates glass from photo field. */
   --shadow-glass:
     inset 0 1px 0 var(--glass-specular),
-    inset 0 -0.5px 0 rgba(255, 255, 255, 0.03),
-    0 1px 0 rgba(255, 255, 255, 0.025),
-    0 10px 28px rgba(0, 0, 0, 0.18);
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.05),
+    0 0.5px 0 rgba(255, 255, 255, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.26);
   --shadow-float: 0 20px 48px rgba(0, 0, 0, 0.48);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -60,8 +60,8 @@
   --topbar-h: 60px;
   --reader-w: min(520px, 44vw);
   --blur: 16px;
-  --blur-nested: 6px;
-  --blur-panel: 10px;
+  --blur-nested: 8px;
+  --blur-panel: 12px;
   --saturate: 118%;
 }
 
@@ -80,7 +80,8 @@ body {
   margin: 0;
   font-family: var(--font);
   color: var(--text);
-  background: transparent;
+  /* Solid fallback under ambient (prevents white flash before paint) */
+  background: var(--bg-0);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -112,9 +113,9 @@ img {
   display: block;
 }
 
-/* ---------- Ambient liquid backdrop · quiet field (Emil restraint) ----------
-   Decorative only. Gradients do the mood work; orbs are almost still.
-   Frequency: always-on chrome → motion must be invisible, not a show.
+/* ---------- Ambient liquid backdrop · Bing daily + quiet field (Emil) ----------
+   Decorative only. Photo is the mood; veil keeps chrome readable.
+   Frequency: always-on → motion must be invisible, not a show.
    ------------------------------------------------------------- */
 .ambient {
   position: fixed;
@@ -122,24 +123,64 @@ img {
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  /* Static depth field carries 90% of atmosphere */
+  /* Fallback depth field while photo loads / fails */
   background:
-    radial-gradient(980px 620px at 8% -6%, rgba(125, 211, 252, 0.055), transparent 64%),
-    radial-gradient(880px 560px at 94% 2%, rgba(167, 139, 250, 0.045), transparent 62%),
-    radial-gradient(740px 480px at 50% 110%, rgba(56, 189, 248, 0.028), transparent 62%),
+    radial-gradient(980px 620px at 8% -6%, rgba(125, 211, 252, 0.045), transparent 64%),
+    radial-gradient(880px 560px at 94% 2%, rgba(167, 139, 250, 0.035), transparent 62%),
+    radial-gradient(740px 480px at 50% 110%, rgba(56, 189, 248, 0.02), transparent 62%),
     linear-gradient(180deg, #07090f 0%, #090d16 52%, #07090f 100%);
+}
+
+/* Bing daily — full-bleed photo, wallpaper restraint (taste > spectacle) */
+.bing-bg {
+  position: absolute;
+  inset: -3%;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  /* Dim + desat so glass + type stay primary */
+  transform: scale(1.03);
+  filter: saturate(0.78) brightness(0.58) contrast(1.02);
+  opacity: 0;
+  /* Rare surface: quiet ease-out fade only — no Ken Burns loop */
+  transition: opacity 640ms var(--ease-out);
+  will-change: opacity;
+}
+
+.ambient.has-bing .bing-bg {
+  opacity: 1;
+}
+
+/* Readability veil — only when photo is present; not a solid curtain */
+.bing-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      168deg,
+      rgba(5, 7, 12, 0.42) 0%,
+      rgba(7, 9, 16, 0.28) 38%,
+      rgba(5, 7, 12, 0.5) 100%
+    ),
+    radial-gradient(1100px 680px at 50% -8%, rgba(125, 211, 252, 0.04), transparent 58%),
+    radial-gradient(860px 560px at 100% 100%, rgba(167, 139, 250, 0.035), transparent 52%);
+  opacity: 0;
+  transition: opacity 640ms var(--ease-out);
+}
+
+.ambient.has-bing .bing-veil {
+  opacity: 1;
 }
 
 .orb {
   position: absolute;
   border-radius: 50%;
   /* Extra-soft wash — large blur, low chroma, low opacity */
-  filter: blur(100px);
-  opacity: 0.12;
-  /* will-change only while animating; dropped when paused */
+  filter: blur(120px);
+  opacity: 0.07;
   will-change: transform;
   /* Near-still drift: long period, tiny travel */
-  animation: float 72s var(--ease-in-out) infinite alternate;
+  animation: float 96s var(--ease-in-out) infinite alternate;
 }
 
 .orb-a {
@@ -149,50 +190,56 @@ img {
   top: 2%;
   background: radial-gradient(
     circle at 32% 32%,
-    rgba(125, 211, 252, 0.22),
-    rgba(56, 120, 210, 0.07) 50%,
-    transparent 74%
+    rgba(125, 211, 252, 0.14),
+    rgba(56, 120, 210, 0.04) 52%,
+    transparent 72%
   );
-  animation-duration: 78s;
-  animation-delay: -18s;
 }
 
 .orb-b {
-  width: 580px;
-  height: 580px;
-  right: -180px;
-  top: -100px;
+  width: 480px;
+  height: 480px;
+  right: -120px;
+  top: 18%;
   background: radial-gradient(
-    circle at 42% 38%,
-    rgba(180, 160, 250, 0.18),
-    rgba(110, 70, 200, 0.06) 52%,
-    transparent 74%
+    circle at 40% 40%,
+    rgba(167, 139, 250, 0.12),
+    rgba(99, 70, 180, 0.04) 55%,
+    transparent 72%
   );
-  animation-duration: 90s;
-  animation-delay: -36s;
-  opacity: 0.1;
+  animation-delay: -26s;
+  animation-duration: 110s;
 }
 
 .orb-c {
-  width: 460px;
-  height: 460px;
-  left: 36%;
-  bottom: -180px;
+  width: 560px;
+  height: 560px;
+  left: 28%;
+  bottom: -18%;
   background: radial-gradient(
     circle at 50% 40%,
-    rgba(90, 200, 230, 0.14),
-    rgba(20, 130, 180, 0.05) 52%,
-    transparent 74%
+    rgba(56, 189, 248, 0.08),
+    rgba(14, 80, 140, 0.03) 55%,
+    transparent 72%
   );
-  animation-duration: 84s;
   animation-delay: -48s;
-  opacity: 0.09;
+  animation-duration: 120s;
+}
+
+/* With photo present, orbs become almost invisible tint only */
+.ambient.has-bing .orb {
+  opacity: 0.03;
+  filter: blur(140px);
+}
+
+.ambient.has-bing .noise {
+  opacity: 0.012;
 }
 
 .noise {
   position: absolute;
   inset: 0;
-  opacity: 0.012;
+  opacity: 0.016;
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   mix-blend-mode: overlay;
@@ -201,12 +248,17 @@ img {
 /* Barely-there drift — if you notice it, it's too loud */
 @keyframes float {
   from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(5px, -4px, 0) scale(1.01); }
+  to   { transform: translate3d(4px, -3px, 0) scale(1.008); }
 }
 
 /* Battery/perf: freeze orbs when tab hidden or reduced-motion */
 .ambient.is-paused .orb {
   animation-play-state: paused;
+  will-change: auto;
+}
+
+.ambient.is-paused .bing-bg {
+  /* No Ken Burns / no continuous filter thrash when paused */
   will-change: auto;
 }
 
@@ -217,13 +269,13 @@ img {
    Transparency: thin fill; specular + hairline define the surface.
    ------------------------------------------------ */
 .glass {
-  /* Near-clear liquid — ambient reads through; not milky frost */
+  /* Liquid over photo: thin tint + soft dark wash; edge/specular define form */
   background:
     linear-gradient(
       165deg,
       rgba(255, 255, 255, 0.055) 0%,
-      rgba(255, 255, 255, 0.014) 38%,
-      rgba(255, 255, 255, 0.006) 100%
+      rgba(255, 255, 255, 0.014) 34%,
+      rgba(6, 10, 18, 0.22) 100%
     ),
     var(--glass);
   backdrop-filter: blur(var(--blur)) saturate(var(--saturate));
@@ -248,12 +300,12 @@ img {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.2) 0%,
-      rgba(255, 255, 255, 0.06) 10%,
-      rgba(255, 255, 255, 0.015) 26%,
-      transparent 46%
+      rgba(255, 255, 255, 0.34) 0%,
+      rgba(255, 255, 255, 0.1) 8%,
+      rgba(255, 255, 255, 0.025) 20%,
+      transparent 40%
     );
-  opacity: 0.85;
+  opacity: 0.88;
   z-index: 1;
 }
 
@@ -265,9 +317,9 @@ img {
   border-radius: inherit;
   pointer-events: none;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.24),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.03),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
   z-index: 1;
 }
 
@@ -283,17 +335,17 @@ img {
   background:
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.035) 0%,
-      rgba(255, 255, 255, 0.008) 100%
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.016)
     ),
     var(--glass-inset);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -0.5px 0 rgba(0, 0, 0, 0.12);
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.14);
   /* Nested blur stays light; never stack 40px+ on controls */
-  backdrop-filter: blur(var(--blur-nested)) saturate(112%);
-  -webkit-backdrop-filter: blur(var(--blur-nested)) saturate(112%);
+  backdrop-filter: blur(var(--blur-nested)) saturate(110%);
+  -webkit-backdrop-filter: blur(var(--blur-nested)) saturate(110%);
   transition:
     border-color 150ms var(--ease-out),
     box-shadow 150ms var(--ease-out),
@@ -306,6 +358,12 @@ img {
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 0 0 3px rgba(139, 219, 255, 0.1);
 }
+
+/* Soften feed toolbar hairline when Bing photo is present */
+.ambient.has-bing ~ .app .list-toolbar {
+  border-bottom-color: rgba(255, 255, 255, 0.045);
+}
+
 
 /* ---------- App shell ---------- */
 .app {
@@ -712,21 +770,22 @@ img {
   border-radius: var(--radius-xl);
   position: relative;
   isolation: isolate;
-  /* One step quieter than shell glass — content stage, not chrome */
+  /* Quieter than shell — content stage. Thin fill + wash; edge carries glass */
   background:
     linear-gradient(
       165deg,
-      rgba(255, 255, 255, 0.032) 0%,
-      rgba(255, 255, 255, 0.008) 100%
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.01) 40%,
+      rgba(6, 10, 18, 0.32) 100%
     ),
-    rgba(255, 255, 255, 0.012);
+    rgba(7, 10, 18, 0.26);
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate));
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 -0.5px 0 rgba(255, 255, 255, 0.02),
-    0 8px 24px rgba(0, 0, 0, 0.14);
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -0.5px 0 rgba(255, 255, 255, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.24);
   overflow: hidden;
   transition:
     border-color 160ms var(--ease-out),
@@ -861,6 +920,7 @@ img {
   border-radius: 12px;
   text-align: left;
   border: 1px solid transparent;
+  /* article card photo wash */
   background: transparent;
   color: var(--text);
   transition:
@@ -2438,6 +2498,11 @@ input:focus:not(:focus-visible) {
    Kill decorative movement & transforms; do NOT force opacity on
    open/closed surfaces (reader/modal/toast still need state opacity). */
 @media (prefers-reduced-motion: reduce) {
+  .bing-bg,
+  .bing-veil {
+    transition: none !important;
+  }
+
   .orb {
     animation: none !important;
     transform: none !important;
