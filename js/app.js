@@ -246,6 +246,20 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+function decodeHtmlEntities(str) {
+  let s = String(str || "");
+  // Feed bodies are often double-escaped: &lt;p&gt;...&lt;/p&gt;
+  for (let i = 0; i < 4; i++) {
+    if (!/&(?:lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/i.test(s)) break;
+    const tpl = document.createElement("textarea");
+    tpl.innerHTML = s;
+    const next = tpl.value;
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 function stripHtml(html) {
   const d = document.createElement("div");
   d.innerHTML = html || "";
@@ -313,11 +327,6 @@ function stripFeedChrome(root) {
     "canvas",
     "video",
     "audio",
-    "picture",
-    "source",
-    "img",
-    "figure",
-    "figcaption",
     "button",
     "form",
     "input",
@@ -336,7 +345,6 @@ function stripFeedChrome(root) {
     ".headline",
     ".question-title",
     ".js-question-holder",
-    ".content-image",
     "[hidden]",
     "a.originUrl",
   ];
@@ -353,22 +361,25 @@ function stripFeedChrome(root) {
     if (isChromeLinkText(a.textContent)) a.remove();
   });
 
-  // Remove empty headings / empty shells
-  root.querySelectorAll("h1,h2,h3,h4,h5,h6,div,span,section,figure,aside").forEach((el) => {
+  // Remove empty headings / empty shells (keep figures with images)
+  root.querySelectorAll("h1,h2,h3,h4,h5,h6,div,span,section,aside").forEach((el) => {
     if (!el.isConnected) return;
     const text = (el.textContent || "").replace(/\s+/g, " ").trim();
-    const hasMedia = el.querySelector("img,video,audio,iframe,svg");
+    const hasMedia = el.querySelector("img,video,audio,iframe,picture");
     if (!text && !hasMedia) el.remove();
   });
 }
 
 /**
- * Text-first reader body:
- * keep prose tags only — no images / layout wrappers / chrome.
+ * Safe reader body HTML:
+ * keep prose + content images; drop shell chrome / scripts / layouts.
  */
 function sanitizeHtml(html) {
+  // Decode entity-encoded payloads from some RSS aggregators
+  const decoded = decodeHtmlEntities(html || "");
+
   const tpl = document.createElement("template");
-  tpl.innerHTML = html || "";
+  tpl.innerHTML = decoded;
 
   // Work inside a disposable root so we can query
   const shell = document.createElement("div");
@@ -379,7 +390,7 @@ function sanitizeHtml(html) {
   const source = contentRoot === shell ? shell : contentRoot.cloneNode(true);
   stripFeedChrome(source);
 
-  // Text-only allowed set (no IMG/FIGURE/DIV layout shells)
+  // Prose + media allowed set
   const allowed = new Set([
     "P",
     "BR",
@@ -411,8 +422,13 @@ function sanitizeHtml(html) {
     "TD",
     "SUP",
     "SUB",
+    "IMG",
+    "FIGURE",
+    "FIGCAPTION",
+    "PICTURE",
+    "SOURCE",
   ]);
-  // Unwrap these into children (layout husks)
+  // Unwrap layout husks
   const unwrap = new Set([
     "DIV",
     "SPAN",
@@ -422,19 +438,14 @@ function sanitizeHtml(html) {
     "ASIDE",
     "HEADER",
     "FOOTER",
-    "PICTURE",
     "CENTER",
     "FONT",
     "LABEL",
-    "FIGURE",
-    "FIGCAPTION",
   ]);
-  // Drop entirely (media + chrome + non-prose)
+  // Drop entirely
   const drop = new Set([
-    "IMG",
     "VIDEO",
     "AUDIO",
-    "SOURCE",
     "IFRAME",
     "OBJECT",
     "EMBED",
@@ -453,7 +464,7 @@ function sanitizeHtml(html) {
     "TEMPLATE",
   ]);
 
-  // Iterative unwrap/drop until stable (avoids recursive re-walk hazards)
+  // Iterative unwrap/drop until stable
   let changed = true;
   let guard = 0;
   while (changed && guard++ < 40) {
@@ -474,25 +485,44 @@ function sanitizeHtml(html) {
     }
   }
 
-  // Clean attributes + empty nodes on remaining allowed elements
+  // Clean attributes; keep safe media/link attrs
   for (const el of [...source.querySelectorAll("*")]) {
     if (!el.isConnected) continue;
     const tag = el.tagName;
-    // Strip all attributes except safe href on anchors
+    const keep = new Set();
+    if (tag === "A") keep.add("href");
+    if (tag === "IMG") {
+      keep.add("src");
+      keep.add("alt");
+      keep.add("width");
+      keep.add("height");
+      keep.add("loading");
+      keep.add("decoding");
+    }
+    if (tag === "SOURCE") {
+      keep.add("src");
+      keep.add("srcset");
+      keep.add("type");
+      keep.add("media");
+    }
+    if (tag === "PICTURE") {
+      /* no attrs needed */
+    }
+
     for (const attr of [...el.attributes]) {
       const n = attr.name.toLowerCase();
-      if (tag === "A" && n === "href") {
-        if (/^\s*javascript:/i.test(attr.value) || /^\s*data:/i.test(attr.value)) {
-          el.removeAttribute(attr.name);
-        }
+      if (!keep.has(n)) {
+        el.removeAttribute(attr.name);
         continue;
       }
-      el.removeAttribute(attr.name);
+      if ((n === "href" || n === "src") && /^\s*(javascript|data|vbscript):/i.test(attr.value)) {
+        el.removeAttribute(attr.name);
+      }
     }
+
     if (tag === "A") {
       const href = el.getAttribute("href");
       if (!href) {
-        // Keep link text, drop dead anchor shell
         el.replaceWith(...el.childNodes);
         continue;
       }
@@ -504,13 +534,29 @@ function sanitizeHtml(html) {
         continue;
       }
     }
+
+    if (tag === "IMG") {
+      const src = el.getAttribute("src") || "";
+      if (!src || /^\s*(javascript|data):/i.test(src)) {
+        el.remove();
+        continue;
+      }
+      // Prefer https for scheme-relative / http mixed content where possible
+      if (src.startsWith("//")) el.setAttribute("src", "https:" + src);
+      else if (src.startsWith("http://")) el.setAttribute("src", "https://" + src.slice(7));
+      el.setAttribute("loading", "lazy");
+      el.setAttribute("decoding", "async");
+      el.setAttribute("referrerpolicy", "no-referrer");
+      if (!el.getAttribute("alt")) el.setAttribute("alt", "");
+    }
+
     if (/^H[1-6]$/.test(tag)) {
       const t = (el.textContent || "").replace(/\s+/g, " ").trim();
       if (!t) el.remove();
     }
   }
 
-  // Flatten nested emphasis: <strong><strong>x</strong></strong> → <strong>x</strong>
+  // Flatten nested emphasis
   let nestGuard = 0;
   let nestChanged = true;
   while (nestChanged && nestGuard++ < 20) {
@@ -536,19 +582,23 @@ function sanitizeHtml(html) {
   while (walker.nextNode()) comments.push(walker.currentNode);
   comments.forEach((c) => c.remove());
 
-  // Remove leftover empty elements (and chrome-only paragraphs)
+  // Remove leftover empty elements (keep br/hr/img)
   source.querySelectorAll("*").forEach((el) => {
     if (!el.isConnected) return;
-    if (el.tagName === "BR" || el.tagName === "HR") return;
+    if (el.tagName === "BR" || el.tagName === "HR" || el.tagName === "IMG") return;
+    if (el.tagName === "FIGURE") {
+      if (!el.querySelector("img") && !(el.textContent || "").trim()) el.remove();
+      return;
+    }
     const t = (el.textContent || "").replace(/\s+/g, " ").trim();
-    if (!t || isChromeLinkText(t)) el.remove();
+    const hasImg = el.querySelector("img");
+    if ((!t && !hasImg) || isChromeLinkText(t)) el.remove();
   });
 
-  // Normalize: if only raw text nodes, wrap in <p>
   const htmlOut = source.innerHTML.trim();
   if (!htmlOut) return "";
   // If no block tags at all, wrap paragraphs by double newlines
-  if (!/<(p|h[1-6]|ul|ol|li|blockquote|pre|table)\b/i.test(htmlOut)) {
+  if (!/<(p|h[1-6]|ul|ol|li|blockquote|pre|table|figure|img)\b/i.test(htmlOut)) {
     const plain = (source.textContent || "").replace(/\r/g, "").trim();
     if (!plain) return "";
     return plain
@@ -836,7 +886,25 @@ function mergeArticles(feed, items) {
   const existing = new Map(state.articles.map((a) => [a.id, a]));
   for (const item of items) {
     const id = articleKey(feed.id, item.link, item.title, item.publishedAt);
-    if (existing.has(id)) continue;
+    const content = item.content || item.snippet || "";
+    const snippet =
+      item.snippet || stripHtml(item.content || "").slice(0, 180);
+    if (existing.has(id)) {
+      // Refresh body/snippet/title so decode fixes apply without re-add
+      const prev = existing.get(id);
+      existing.set(id, {
+        ...prev,
+        feedTitle: feed.title,
+        feedColor: feed.color,
+        title: item.title || prev.title || "(无标题)",
+        link: item.link || prev.link || "",
+        snippet: snippet || prev.snippet || "",
+        content: content || prev.content || "",
+        publishedAt: item.publishedAt || prev.publishedAt || null,
+        author: item.author || prev.author || "",
+      });
+      continue;
+    }
     /** @type {Article} */
     const article = {
       id,
@@ -845,8 +913,8 @@ function mergeArticles(feed, items) {
       feedColor: feed.color,
       title: item.title || "(无标题)",
       link: item.link || "",
-      snippet: item.snippet || stripHtml(item.content || "").slice(0, 180),
-      content: item.content || item.snippet || "",
+      snippet,
+      content,
       publishedAt: item.publishedAt || null,
       author: item.author || "",
     };
@@ -1299,7 +1367,7 @@ function openReader(id, opts = {}) {
   `;
 
   const body = article.content || article.snippet || "";
-  const safe = sanitizeHtml(body);
+  const safe = sanitizeHtml(decodeHtmlEntities(body));
   if (safe && stripHtml(safe).length > 0) {
     els.readerContent.innerHTML = safe;
   } else {

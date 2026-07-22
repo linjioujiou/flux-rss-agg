@@ -138,16 +138,39 @@ function parseFeed(xml) {
 function decodeEntities(str) {
   return String(str || "")
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) =>
-      String.fromCharCode(parseInt(h, 16))
-    )
-    .replace(/&amp;/g, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&#0*34;/g, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = Number(n);
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const code = parseInt(h, 16);
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
     .trim();
+}
+
+/**
+ * Feed bodies are often entity-encoded HTML (&lt;p&gt;...&lt;/p&gt;).
+ * Decode until we get real tags or the string stabilizes.
+ */
+function decodeHtmlPayload(str) {
+  let s = String(str || "");
+  for (let i = 0; i < 4; i++) {
+    const next = decodeEntities(s);
+    if (next === s) break;
+    s = next;
+    // Stop once we have real tags and no more encoded open-tags
+    if (/<[a-zA-Z][\s\S]*>/.test(s) && !/&lt;\/?[a-zA-Z]/.test(s)) break;
+  }
+  return s;
 }
 
 function stripTags(html) {
@@ -185,7 +208,8 @@ function tagHtml(block, names) {
     const m = block.match(re);
     if (m) {
       const raw = m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1").trim();
-      if (raw) return raw;
+      // Always decode entity-encoded HTML so the client can render tags/images
+      if (raw) return decodeHtmlPayload(raw);
     }
   }
   return "";
