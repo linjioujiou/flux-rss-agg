@@ -1,0 +1,16 @@
+{
+    "name":  "flux-rss-agg",
+    "version":  "1.0.0",
+    "private":  true,
+    "description":  "Liquid-glass RSS aggregator for Cloudflare Pages",
+    "scripts":  {
+                    "dev:local":  "node dev-server.mjs",
+                    "dev":  "node dev-server.mjs",
+                    "dev:wrangler":  "wrangler pages dev . --compatibility-date=2024-11-01 --port 8788",
+                    "deploy":  "wrangler pages deploy . --project-name=flux-rss"
+                },
+    "devDependencies":  {
+                            "wrangler":  "^3.99.0"
+                        },
+    "type":  "module"
+}

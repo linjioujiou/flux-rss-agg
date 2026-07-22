@@ -1,0 +1,11 @@
+﻿node_modules/
+.wrangler/
+.wrangler-logs/
+.config/
+.dev.vars
+*.log
+dev.err
+dev.log
+.DS_Store
+dist/
+.cache/
