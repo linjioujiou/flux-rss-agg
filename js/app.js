@@ -252,52 +252,313 @@ function stripHtml(html) {
   return (d.textContent || d.innerText || "").replace(/\s+/g, " ").trim();
 }
 
-/** Allow only safe-ish subset for reader content */
+/**
+ * Peel common feed wrappers (Zhihu Daily, WeChat-ish shells, etc.)
+ * Prefer the densest text-bearing content root.
+ */
+function extractContentRoot(root) {
+  if (!root) return root;
+  const candidates = [
+    ".answer .content",
+    ".content-inner .content",
+    ".content-inner",
+    ".RichText",
+    ".Post-RichText",
+    ".entry-content",
+    ".article-content",
+    ".post-content",
+    ".post-body",
+    ".article-body",
+    ".story-body",
+    ".main-content",
+    ".content",
+    "article",
+  ];
+  let best = null;
+  let bestScore = 0;
+  for (const sel of candidates) {
+    for (const el of root.querySelectorAll(sel)) {
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      // Prefer longer pure text; penalize chrome-heavy shells
+      const score =
+        text.length -
+        el.querySelectorAll("img,script,style,nav,footer,figure").length * 40;
+      if (score > bestScore && text.length >= 40) {
+        best = el;
+        bestScore = score;
+      }
+    }
+  }
+  return best || root;
+}
+
+/** Chrome-only CTA / footer link text (Zhihu, WeChat, generic) */
+function isChromeLinkText(t) {
+  const s = (t || "").replace(/\s+/g, " ").trim();
+  if (!s) return true;
+  return /查看知乎原文|查看知乎讨论|阅读原文|原文链接|查看原文|阅读全文|展开全文|View original|Read more|Continue reading/i.test(
+    s
+  );
+}
+
+/** Drop Zhihu/meta chrome and empty structural husks before sanitize */
+function stripFeedChrome(root) {
+  if (!root) return;
+  const killSelectors = [
+    "script",
+    "style",
+    "noscript",
+    "iframe",
+    "svg",
+    "canvas",
+    "video",
+    "audio",
+    "picture",
+    "source",
+    "img",
+    "figure",
+    "figcaption",
+    "button",
+    "form",
+    "input",
+    "textarea",
+    "select",
+    "nav",
+    "footer",
+    "header",
+    ".meta",
+    ".avatar",
+    ".author",
+    ".bio",
+    ".originUrl",
+    ".view-more",
+    ".img-place-holder",
+    ".headline",
+    ".question-title",
+    ".js-question-holder",
+    ".content-image",
+    "[hidden]",
+    "a.originUrl",
+  ];
+  for (const sel of killSelectors) {
+    try {
+      root.querySelectorAll(sel).forEach((n) => n.remove());
+    } catch {
+      /* ignore invalid selector edge cases */
+    }
+  }
+
+  // Drop chrome-only links by visible text
+  root.querySelectorAll("a").forEach((a) => {
+    if (isChromeLinkText(a.textContent)) a.remove();
+  });
+
+  // Remove empty headings / empty shells
+  root.querySelectorAll("h1,h2,h3,h4,h5,h6,div,span,section,figure,aside").forEach((el) => {
+    if (!el.isConnected) return;
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    const hasMedia = el.querySelector("img,video,audio,iframe,svg");
+    if (!text && !hasMedia) el.remove();
+  });
+}
+
+/**
+ * Text-first reader body:
+ * keep prose tags only — no images / layout wrappers / chrome.
+ */
 function sanitizeHtml(html) {
   const tpl = document.createElement("template");
   tpl.innerHTML = html || "";
+
+  // Work inside a disposable root so we can query
+  const shell = document.createElement("div");
+  shell.append(...tpl.content.childNodes);
+
+  stripFeedChrome(shell);
+  const contentRoot = extractContentRoot(shell);
+  const source = contentRoot === shell ? shell : contentRoot.cloneNode(true);
+  stripFeedChrome(source);
+
+  // Text-only allowed set (no IMG/FIGURE/DIV layout shells)
   const allowed = new Set([
-    "P", "BR", "A", "STRONG", "EM", "B", "I", "U", "S", "CODE", "PRE",
-    "UL", "OL", "LI", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6",
-    "IMG", "FIGURE", "FIGCAPTION", "HR", "SPAN", "DIV", "TABLE", "THEAD",
-    "TBODY", "TR", "TH", "TD", "SUP", "SUB",
+    "P",
+    "BR",
+    "A",
+    "STRONG",
+    "EM",
+    "B",
+    "I",
+    "U",
+    "S",
+    "CODE",
+    "PRE",
+    "UL",
+    "OL",
+    "LI",
+    "BLOCKQUOTE",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HR",
+    "TABLE",
+    "THEAD",
+    "TBODY",
+    "TR",
+    "TH",
+    "TD",
+    "SUP",
+    "SUB",
   ]);
-  const walk = (node) => {
-    const children = [...node.childNodes];
-    for (const child of children) {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        if (!allowed.has(child.tagName)) {
-          child.replaceWith(...child.childNodes);
-          continue;
-        }
-        // Strip event handlers / style / scripts
-        for (const attr of [...child.attributes]) {
-          const n = attr.name.toLowerCase();
-          if (n.startsWith("on") || n === "style" || n === "srcset") {
-            child.removeAttribute(attr.name);
-            continue;
-          }
-          if ((n === "href" || n === "src") && /^\s*javascript:/i.test(attr.value)) {
-            child.removeAttribute(attr.name);
-          }
-        }
-        if (child.tagName === "A") {
-          child.setAttribute("target", "_blank");
-          child.setAttribute("rel", "noopener noreferrer");
-        }
-        if (child.tagName === "IMG") {
-          child.setAttribute("loading", "lazy");
-          child.removeAttribute("width");
-          child.removeAttribute("height");
-        }
-        walk(child);
-      } else if (child.nodeType === Node.COMMENT_NODE) {
-        child.remove();
+  // Unwrap these into children (layout husks)
+  const unwrap = new Set([
+    "DIV",
+    "SPAN",
+    "SECTION",
+    "ARTICLE",
+    "MAIN",
+    "ASIDE",
+    "HEADER",
+    "FOOTER",
+    "PICTURE",
+    "CENTER",
+    "FONT",
+    "LABEL",
+    "FIGURE",
+    "FIGCAPTION",
+  ]);
+  // Drop entirely (media + chrome + non-prose)
+  const drop = new Set([
+    "IMG",
+    "VIDEO",
+    "AUDIO",
+    "SOURCE",
+    "IFRAME",
+    "OBJECT",
+    "EMBED",
+    "SCRIPT",
+    "STYLE",
+    "LINK",
+    "META",
+    "SVG",
+    "CANVAS",
+    "BUTTON",
+    "FORM",
+    "INPUT",
+    "TEXTAREA",
+    "SELECT",
+    "NOSCRIPT",
+    "TEMPLATE",
+  ]);
+
+  // Iterative unwrap/drop until stable (avoids recursive re-walk hazards)
+  let changed = true;
+  let guard = 0;
+  while (changed && guard++ < 40) {
+    changed = false;
+    const els = [...source.querySelectorAll("*")];
+    for (const el of els) {
+      if (!el.isConnected) continue;
+      const tag = el.tagName;
+      if (drop.has(tag)) {
+        el.remove();
+        changed = true;
+        continue;
+      }
+      if (unwrap.has(tag) || !allowed.has(tag)) {
+        el.replaceWith(...el.childNodes);
+        changed = true;
       }
     }
-  };
-  walk(tpl.content);
-  return tpl.innerHTML;
+  }
+
+  // Clean attributes + empty nodes on remaining allowed elements
+  for (const el of [...source.querySelectorAll("*")]) {
+    if (!el.isConnected) continue;
+    const tag = el.tagName;
+    // Strip all attributes except safe href on anchors
+    for (const attr of [...el.attributes]) {
+      const n = attr.name.toLowerCase();
+      if (tag === "A" && n === "href") {
+        if (/^\s*javascript:/i.test(attr.value) || /^\s*data:/i.test(attr.value)) {
+          el.removeAttribute(attr.name);
+        }
+        continue;
+      }
+      el.removeAttribute(attr.name);
+    }
+    if (tag === "A") {
+      const href = el.getAttribute("href");
+      if (!href) {
+        // Keep link text, drop dead anchor shell
+        el.replaceWith(...el.childNodes);
+        continue;
+      }
+      el.setAttribute("target", "_blank");
+      el.setAttribute("rel", "noopener noreferrer");
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (isChromeLinkText(t)) {
+        el.remove();
+        continue;
+      }
+    }
+    if (/^H[1-6]$/.test(tag)) {
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!t) el.remove();
+    }
+  }
+
+  // Flatten nested emphasis: <strong><strong>x</strong></strong> → <strong>x</strong>
+  let nestGuard = 0;
+  let nestChanged = true;
+  while (nestChanged && nestGuard++ < 20) {
+    nestChanged = false;
+    for (const tag of ["STRONG", "EM", "B", "I"]) {
+      for (const el of [...source.querySelectorAll(tag)]) {
+        if (!el.isConnected) continue;
+        if (
+          el.childNodes.length === 1 &&
+          el.firstChild.nodeType === 1 &&
+          el.firstChild.tagName === tag
+        ) {
+          el.replaceWith(el.firstChild);
+          nestChanged = true;
+        }
+      }
+    }
+  }
+
+  // Strip leftover comments
+  const walker = document.createTreeWalker(source, NodeFilter.SHOW_COMMENT);
+  const comments = [];
+  while (walker.nextNode()) comments.push(walker.currentNode);
+  comments.forEach((c) => c.remove());
+
+  // Remove leftover empty elements (and chrome-only paragraphs)
+  source.querySelectorAll("*").forEach((el) => {
+    if (!el.isConnected) return;
+    if (el.tagName === "BR" || el.tagName === "HR") return;
+    const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!t || isChromeLinkText(t)) el.remove();
+  });
+
+  // Normalize: if only raw text nodes, wrap in <p>
+  const htmlOut = source.innerHTML.trim();
+  if (!htmlOut) return "";
+  // If no block tags at all, wrap paragraphs by double newlines
+  if (!/<(p|h[1-6]|ul|ol|li|blockquote|pre|table)\b/i.test(htmlOut)) {
+    const plain = (source.textContent || "").replace(/\r/g, "").trim();
+    if (!plain) return "";
+    return plain
+      .split(/\n{2,}/)
+      .map((para) => para.replace(/\s*\n\s*/g, " ").trim())
+      .filter(Boolean)
+      .map((para) => `<p>${escapeHtml(para)}</p>`)
+      .join("");
+  }
+  return htmlOut;
 }
 
 function formatTime(ts) {
