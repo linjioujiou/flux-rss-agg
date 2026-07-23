@@ -1601,6 +1601,7 @@ function openReader(id, opts = {}) {
 
   // Bring active card into view without smooth scrolling (frequent / virtual)
   scrollVirtualToId(id, { align: "nearest" });
+  document.body.classList.add("is-reader-open");
 }
 
 async function closeReader() {
@@ -1610,12 +1611,14 @@ async function closeReader() {
   if (els.readerPos) els.readerPos.textContent = "—";
   if (reduceMotion()) {
     els.content.classList.remove("has-reader", "is-reader-closing", "is-reader-instant");
+    document.body.classList.remove("is-reader-open");
     renderList({ animate: false });
     return;
   }
   els.content.classList.add("is-reader-closing");
   await wait(150); // match exit duration
   els.content.classList.remove("has-reader", "is-reader-closing", "is-reader-instant");
+  document.body.classList.remove("is-reader-open");
   renderList({ animate: false });
 }
 
@@ -1637,6 +1640,12 @@ function openModal(prefill = "") {
 }
 
 async function closeModal() {
+  const sheet = els.modalRoot?.querySelector?.(".modal");
+  if (sheet) {
+    sheet.classList.remove("is-sheet-dragging");
+    sheet.style.transform = "";
+    sheet.style.opacity = "";
+  }
   if (reduceMotion()) {
     els.modalRoot.classList.remove("is-open", "is-closing");
     els.modalRoot.hidden = true;
@@ -1863,6 +1872,7 @@ function bindEvents() {
   });
 
   // Mobile sidebar drawer (Emil: ease-drawer, exit faster, scrim)
+  bindMobileGestures();
   els.sidebarOpen?.addEventListener("click", () => openMobileSidebar());
   els.sidebarClose?.addEventListener("click", () => closeMobileSidebar());
   els.sidebarScrim?.addEventListener("click", () => closeMobileSidebar());
@@ -1882,7 +1892,13 @@ function isMobileDrawer() {
 function openMobileSidebar() {
   if (!els.sidebar) return;
   document.body.classList.remove("sidebar-closing");
-  if (els.sidebarScrim) els.sidebarScrim.hidden = false;
+  els.sidebar.classList.remove("is-dragging");
+  els.sidebar.style.transform = "";
+  if (els.sidebarScrim) {
+    els.sidebarScrim.hidden = false;
+    els.sidebarScrim.classList.remove("is-dragging");
+    els.sidebarScrim.style.opacity = "";
+  }
   els.sidebarOpen?.setAttribute("aria-expanded", "true");
 
   // Double rAF so scrim/drawer transitions actually run after unhide
@@ -1904,10 +1920,19 @@ function openMobileSidebar() {
 
 async function closeMobileSidebar(opts = {}) {
   if (!els.sidebar) return;
-  const open = els.sidebar.classList.contains("is-open") || document.body.classList.contains("sidebar-open");
-  if (!open) return;
+  const open =
+    els.sidebar.classList.contains("is-open") ||
+    document.body.classList.contains("sidebar-open");
+  if (!open && !opts.force) return;
 
   els.sidebarOpen?.setAttribute("aria-expanded", "false");
+  // Clear gesture-driven styles so CSS transitions own the exit
+  els.sidebar.classList.remove("is-dragging");
+  els.sidebar.style.transform = "";
+  if (els.sidebarScrim) {
+    els.sidebarScrim.classList.remove("is-dragging");
+    els.sidebarScrim.style.opacity = "";
+  }
 
   if (opts.instant || reduceMotion() || !isMobileDrawer()) {
     els.sidebar.classList.remove("is-open");
@@ -1923,6 +1948,375 @@ async function closeMobileSidebar(opts = {}) {
   document.body.classList.remove("sidebar-open", "sidebar-closing");
   if (els.sidebarScrim) els.sidebarScrim.hidden = true;
 }
+
+/** Invisible left-edge hit target for edge-swipe open (mobile only). */
+function ensureEdgeOpenZone() {
+  let zone = document.getElementById("edgeOpenZone");
+  if (zone) return zone;
+  zone = document.createElement("div");
+  zone.id = "edgeOpenZone";
+  zone.className = "edge-open-zone";
+  zone.setAttribute("aria-hidden", "true");
+  document.body.appendChild(zone);
+  return zone;
+}
+
+/**
+ * Mobile gestures (Emil):
+ * - Edge swipe opens drawer (16px zone)
+ * - Drag drawer/scrim to dismiss; transform-only, rubber-band past bounds
+ * - Multi-touch: only first pointer wins
+ * - Horizontal vs vertical: decide after 8px; require |dx| > |dy| * 1.15
+ * - Bottom sheet: drag grabber/head down >96px closes modal
+ * - visualViewport → --kb-inset for keyboard lift
+ */
+function bindMobileGestures() {
+  if (bindMobileGestures._bound) return;
+  bindMobileGestures._bound = true;
+
+  const zone = ensureEdgeOpenZone();
+  const drawer = els.sidebar;
+  const scrim = els.sidebarScrim;
+  if (!drawer) return;
+
+  const DRAWER_W = () => Math.min(312, Math.max(240, window.innerWidth - 12));
+  const rubber = (over, dim) => {
+    // Soft resistance past bounds (iOS-like)
+    const max = dim * 0.22;
+    const t = Math.max(0, over);
+    return (max * t) / (t + max * 0.85);
+  };
+
+  let ptrId = null;
+  let mode = null; // "open" | "close" | null
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let decided = false;
+  let active = false;
+  let baseX = 0; // transform translateX at gesture start
+
+  const setDragging = (on) => {
+    drawer.classList.toggle("is-dragging", on);
+    scrim?.classList.toggle("is-dragging", on);
+  };
+
+  const applyX = (x) => {
+    const w = DRAWER_W();
+    // x is visual left edge: -w closed, 0 open
+    let clamped = x;
+    if (x > 0) clamped = rubber(x, w);
+    if (x < -w) clamped = -w - rubber(-w - x, w);
+    drawer.style.transform = `translate3d(${clamped}px, 0, 0)`;
+    if (scrim && !scrim.hidden) {
+      const progress = Math.min(1, Math.max(0, (clamped + w) / w));
+      scrim.style.opacity = String(progress);
+    }
+  };
+
+  const endGesture = (commitOpen) => {
+    setDragging(false);
+    drawer.style.transform = "";
+    if (scrim) scrim.style.opacity = "";
+    ptrId = null;
+    mode = null;
+    active = false;
+    decided = false;
+
+    if (commitOpen) {
+      // Snap to open classes immediately — gesture already carried spatial motion
+      drawer.classList.add("is-open");
+      document.body.classList.add("sidebar-open");
+      document.body.classList.remove("sidebar-closing");
+      els.sidebarOpen?.setAttribute("aria-expanded", "true");
+      if (scrim) {
+        scrim.hidden = false;
+        scrim.style.opacity = "";
+      }
+    } else {
+      // Force cleanup even if only mid-open (is-open without body class)
+      closeMobileSidebar({
+        instant: reduceMotion() || !isMobileDrawer(),
+        force: true,
+      });
+    }
+  };
+
+  const onPointerDown = (e, nextMode) => {
+    if (!isMobileDrawer() || reduceMotion()) return;
+    if (ptrId != null) return; // multi-touch: ignore extra
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // Don't start close-drag from interactive controls inside drawer
+    if (nextMode === "close" && e.target?.closest?.("button, a, input, textarea, select, label")) {
+      return;
+    }
+    ptrId = e.pointerId;
+    mode = nextMode;
+    startX = e.clientX;
+    startY = e.clientY;
+    lastX = startX;
+    decided = false;
+    active = false;
+    const w = DRAWER_W();
+    baseX = mode === "open" ? -w : 0;
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onPointerMove = (e) => {
+    if (e.pointerId !== ptrId || !mode) return;
+    lastX = e.clientX;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (!decided) {
+      if (Math.hypot(dx, dy) < 8) return;
+      decided = true;
+      // Horizontal only if clearly more horizontal
+      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
+        // Vertical intent — abandon drawer gesture (list still scrolls)
+        ptrId = null;
+        mode = null;
+        return;
+      }
+      // Open: require rightward; close: leftward preferred but allow either once started
+      if (mode === "open" && dx < 0) {
+        ptrId = null;
+        mode = null;
+        return;
+      }
+      active = true;
+      setDragging(true);
+      if (mode === "open") {
+        // Prepare scrim for progressive fade-in
+        if (scrim) {
+          scrim.hidden = false;
+          scrim.style.opacity = "0";
+        }
+        drawer.classList.add("is-open"); // so width/layout exists under transform
+      }
+    }
+
+    if (!active) return;
+    e.preventDefault();
+    applyX(baseX + dx);
+  };
+
+  const onPointerUp = (e) => {
+    if (e.pointerId !== ptrId || !mode) return;
+    if (!active) {
+      ptrId = null;
+      mode = null;
+      decided = false;
+      return;
+    }
+    const w = DRAWER_W();
+    const dx = lastX - startX;
+    const x = baseX + dx;
+    // Threshold: 28% of width or fling-ish 72px
+    let commitOpen;
+    if (mode === "open") {
+      commitOpen = x > -w * 0.72 || dx > 72;
+    } else {
+      commitOpen = x > -w * 0.28 && dx > -72;
+    }
+    endGesture(commitOpen);
+  };
+
+  const onPointerCancel = (e) => {
+    if (e.pointerId !== ptrId) return;
+    if (active) {
+      // Snap back to prior state
+      const wasOpen = mode === "close" || document.body.classList.contains("sidebar-open");
+      endGesture(wasOpen);
+    } else {
+      ptrId = null;
+      mode = null;
+      decided = false;
+      active = false;
+    }
+  };
+
+  // Edge open
+  zone.addEventListener("pointerdown", (e) => onPointerDown(e, "open"), { passive: true });
+  zone.addEventListener("pointermove", onPointerMove, { passive: false });
+  zone.addEventListener("pointerup", onPointerUp, { passive: true });
+  zone.addEventListener("pointercancel", onPointerCancel, { passive: true });
+
+  // Drag drawer to close (panel surface)
+  drawer.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (!document.body.classList.contains("sidebar-open")) return;
+      onPointerDown(e, "close");
+    },
+    { passive: true }
+  );
+  drawer.addEventListener("pointermove", onPointerMove, { passive: false });
+  drawer.addEventListener("pointerup", onPointerUp, { passive: true });
+  drawer.addEventListener("pointercancel", onPointerCancel, { passive: true });
+
+  // Scrim drag / flick to dismiss
+  if (scrim) {
+    scrim.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (!document.body.classList.contains("sidebar-open")) return;
+        onPointerDown(e, "close");
+      },
+      { passive: true }
+    );
+    scrim.addEventListener("pointermove", onPointerMove, { passive: false });
+    scrim.addEventListener("pointerup", onPointerUp, { passive: true });
+    scrim.addEventListener("pointercancel", onPointerCancel, { passive: true });
+  }
+
+  bindSheetDismiss();
+  bindVisualViewport();
+}
+
+/** Bottom sheet: drag grabber / modal head down to dismiss. */
+function bindSheetDismiss() {
+  if (bindSheetDismiss._bound) return;
+  bindSheetDismiss._bound = true;
+
+  const root = els.modalRoot;
+  if (!root) return;
+  const sheet = root.querySelector(".modal");
+  const grabber = root.querySelector(".modal-grabber");
+  const head = root.querySelector(".modal-head") || grabber;
+  if (!sheet) return;
+
+  let ptrId = null;
+  let startY = 0;
+  let lastY = 0;
+  let dragging = false;
+  let decided = false;
+
+  const targets = [grabber, head].filter(Boolean);
+  // Deduplicate if head contains grabber
+  const bindTargets = [...new Set(targets)];
+
+  const resetSheet = () => {
+    sheet.classList.remove("is-sheet-dragging");
+    sheet.style.transform = "";
+    sheet.style.opacity = "";
+  };
+
+  const onDown = (e) => {
+    if (!isMobileDrawer() || reduceMotion()) return;
+    if (root.hidden || !root.classList.contains("is-open")) return;
+    if (ptrId != null) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // Don't steal clicks on close button
+    if (e.target?.closest?.("button, a, input, textarea, select")) return;
+
+    ptrId = e.pointerId;
+    startY = e.clientY;
+    lastY = startY;
+    dragging = false;
+    decided = false;
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onMove = (e) => {
+    if (e.pointerId !== ptrId) return;
+    lastY = e.clientY;
+    const dy = lastY - startY;
+    const dx = e.clientX - (e.clientX); // not used; vertical sheet
+
+    if (!decided) {
+      if (Math.abs(dy) < 8) return;
+      decided = true;
+      // Only pull down
+      if (dy < 0) {
+        ptrId = null;
+        return;
+      }
+      dragging = true;
+      sheet.classList.add("is-sheet-dragging");
+    }
+    if (!dragging) return;
+    e.preventDefault();
+    const y = Math.max(0, dy);
+    // Light rubber past 0 already handled; damp far travel
+    const damped = y < 180 ? y : 180 + (y - 180) * 0.28;
+    sheet.style.transform = `translate3d(0, ${damped}px, 0)`;
+    sheet.style.opacity = String(Math.max(0.45, 1 - damped / 320));
+  };
+
+  const onUp = (e) => {
+    if (e.pointerId !== ptrId) return;
+    const dy = lastY - startY;
+    ptrId = null;
+    if (!dragging) {
+      decided = false;
+      return;
+    }
+    dragging = false;
+    decided = false;
+    if (dy > 96) {
+      resetSheet();
+      closeModal();
+      return;
+    }
+    // Snap back
+    resetSheet();
+  };
+
+  const onCancel = (e) => {
+    if (e.pointerId !== ptrId) return;
+    ptrId = null;
+    dragging = false;
+    decided = false;
+    resetSheet();
+  };
+
+  for (const t of bindTargets) {
+    t.addEventListener("pointerdown", onDown, { passive: true });
+    t.addEventListener("pointermove", onMove, { passive: false });
+    t.addEventListener("pointerup", onUp, { passive: true });
+    t.addEventListener("pointercancel", onCancel, { passive: true });
+  }
+}
+
+/** Map software keyboard overlap into --kb-inset (Emil: quiet layout shift). */
+function bindVisualViewport() {
+  if (bindVisualViewport._bound) return;
+  bindVisualViewport._bound = true;
+  const vv = window.visualViewport;
+  if (!vv) return;
+
+  let raf = 0;
+  const update = () => {
+    raf = 0;
+    // Overlap between layout viewport bottom and visual viewport bottom
+    const layoutH = window.innerHeight;
+    const visibleBottom = vv.offsetTop + vv.height;
+    const inset = Math.max(0, Math.round(layoutH - visibleBottom));
+    // Ignore tiny chrome jitter
+    const value = inset > 48 ? inset : 0;
+    document.documentElement.style.setProperty("--kb-inset", `${value}px`);
+  };
+
+  const schedule = () => {
+    if (raf) return;
+    raf = requestAnimationFrame(update);
+  };
+
+  vv.addEventListener("resize", schedule);
+  vv.addEventListener("scroll", schedule);
+  window.addEventListener("orientationchange", schedule);
+  update();
+}
+
 
 /* ---------- Boot ---------- */
 async function boot() {
