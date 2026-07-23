@@ -1,11 +1,13 @@
 /**
  * Flux · RSS Aggregate
- * Client app: localStorage feeds, CF Pages API proxy, liquid-glass UI
+ * Client app: Workers KV feeds + localStorage cache, CF Pages API, liquid-glass UI
  */
 
 const STORAGE_KEY = "flux.feeds.v1";
 const STATE_KEY = "flux.state.v1";
 const PREFS_KEY = "flux.prefs.v1";
+const KV_FEEDS_URL = "/api/feeds";
+const MIGRATED_KEY = "flux.migrated.v1";
 const FONT_STEPS = [0.9, 0.95, 1, 1.08, 1.16, 1.28];
 const DEFAULT_FONT_STEP = 2;
 
@@ -164,6 +166,7 @@ const els = {
   sidebar: $("#sidebar"),
   sidebarOpen: $("#sidebarOpen"),
   sidebarClose: $("#sidebarClose"),
+  sidebarScrim: $("#sidebarScrim"),
   feedNav: $("#feedNav"),
   countAll: $("#countAll"),
   openAddFeed: $("#openAddFeed"),
@@ -228,6 +231,9 @@ const state = {
   loading: false,
   /** font step index into FONT_STEPS */
   fontStep: DEFAULT_FONT_STEP,
+  /** @type {number|null} */
+  _kvSyncTimer: null,
+  _kvAvailable: false,
   _progressRaf: 0,
   /** Virtual list cache */
   _vlist: {
@@ -242,10 +248,138 @@ const state = {
 };
 
 /* ---------- Storage ---------- */
+
+/**
+ * Source of truth: Cloudflare Workers KV via /api/feeds.
+ * localStorage is a cache for instant paint + offline fallback.
+ */
+
+function cacheFeedsLocally() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.feeds));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** Normalize feed list from API / local */
+function normalizeFeeds(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const url = String(item.url || "").trim();
+    if (!url || seen.has(url)) continue;
+    try {
+      const u = new URL(url);
+      if (!["http:", "https:"].includes(u.protocol)) continue;
+    } catch {
+      continue;
+    }
+    seen.add(url);
+    out.push({
+      id: String(item.id || "").trim() || uid(),
+      url,
+      title: String(item.title || url).trim() || url,
+      color: String(item.color || colorFor(url)),
+      addedAt: Number(item.addedAt) || Date.now(),
+    });
+  }
+  return out;
+}
+
+/**
+ * Load feeds from KV. Returns:
+ *  - "remote"  KV is source of truth (even if empty list)
+ *  - "local"   KV unavailable; keep localStorage
+ *  - "migrate" KV empty + local has data → should upload
+ */
+async function loadFeedsFromKV() {
+  try {
+    const res = await fetch(KV_FEEDS_URL, {
+      method: "GET",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error("KV status " + res.status);
+    const data = await res.json();
+    if (data.storage !== "kv" || !Array.isArray(data.feeds)) {
+      return "local";
+    }
+    state._kvAvailable = true;
+    const remote = normalizeFeeds(data.feeds);
+    if (remote.length) {
+      state.feeds = remote;
+      cacheFeedsLocally();
+      return "remote";
+    }
+    if (state.feeds.length) return "migrate";
+    state.feeds = [];
+    cacheFeedsLocally();
+    return "remote";
+  } catch (err) {
+    console.warn("loadFeedsFromKV failed", err);
+    state._kvAvailable = false;
+    return "local";
+  }
+}
+
+/** Immediate PUT to KV (no debounce). Returns true on success. */
+async function flushFeedsToKV({ quiet = true } = {}) {
+  try {
+    const res = await fetch(KV_FEEDS_URL, {
+      method: "PUT",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ feeds: state.feeds }),
+      keepalive: true,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(errText || "KV PUT " + res.status);
+    }
+    state._kvAvailable = true;
+    return true;
+  } catch (err) {
+    console.warn("flushFeedsToKV failed", err);
+    state._kvAvailable = false;
+    if (!quiet) {
+      toast("云端同步失败，已保存在本机");
+    }
+    return false;
+  }
+}
+
+/** Debounced background sync after edits */
+function syncFeedsToKV() {
+  if (state._kvSyncTimer) clearTimeout(state._kvSyncTimer);
+  state._kvSyncTimer = setTimeout(() => {
+    state._kvSyncTimer = null;
+    flushFeedsToKV({ quiet: false }).catch(() => {});
+  }, 400);
+}
+
+/** Flush pending debounce immediately (tab close / hide) */
+function flushPendingFeedSync() {
+  if (state._kvSyncTimer) {
+    clearTimeout(state._kvSyncTimer);
+    state._kvSyncTimer = null;
+    flushFeedsToKV({ quiet: true }).catch(() => {});
+  }
+}
+
+function bindFeedSyncLifecycle() {
+  window.addEventListener("pagehide", flushPendingFeedSync);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingFeedSync();
+  });
+}
+
 function loadPersisted() {
   try {
     const feeds = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    state.feeds = Array.isArray(feeds) ? feeds : [];
+    state.feeds = normalizeFeeds(feeds);
   } catch {
     state.feeds = [];
   }
@@ -268,7 +402,8 @@ function loadPersisted() {
 }
 
 function saveFeeds() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.feeds));
+  cacheFeedsLocally();
+  syncFeedsToKV();
 }
 
 function saveState() {
@@ -926,7 +1061,9 @@ async function addFeed(url, name = "") {
     addedAt: Date.now(),
   };
   state.feeds.unshift(feed);
-  saveFeeds();
+  cacheFeedsLocally();
+  const synced = await flushFeedsToKV({ quiet: false });
+  if (!synced) saveFeeds();
   mergeArticles(feed, data.items || []);
   renderNav();
   renderList({ animate: true });
@@ -941,7 +1078,8 @@ function removeFeed(id) {
     const still = state.articles.find((a) => a.id === state.activeArticleId);
     if (!still) closeReader();
   }
-  saveFeeds();
+  cacheFeedsLocally();
+  flushFeedsToKV({ quiet: false }).then((ok) => { if (!ok) saveFeeds(); });
   renderNav();
   renderList({ animate: true });
   toast("已移除订阅源");
@@ -1483,6 +1621,7 @@ async function closeReader() {
 
 /* ---------- Modal ---------- */
 function openModal(prefill = "") {
+  closeMobileSidebar({ instant: true });
   els.modalError.hidden = true;
   els.modalError.textContent = "";
   els.feedUrl.value = prefill;
@@ -1723,22 +1862,66 @@ function bindEvents() {
     }
   });
 
-  // Mobile sidebar
-  els.sidebarOpen.addEventListener("click", () => {
-    els.sidebar.classList.add("is-open");
-    document.body.classList.add("sidebar-open");
-  });
-  els.sidebarClose.addEventListener("click", closeMobileSidebar);
-  document.addEventListener("click", (e) => {
-    if (!document.body.classList.contains("sidebar-open")) return;
-    if (els.sidebar.contains(e.target) || els.sidebarOpen.contains(e.target)) return;
-    closeMobileSidebar();
+  // Mobile sidebar drawer (Emil: ease-drawer, exit faster, scrim)
+  els.sidebarOpen?.addEventListener("click", () => openMobileSidebar());
+  els.sidebarClose?.addEventListener("click", () => closeMobileSidebar());
+  els.sidebarScrim?.addEventListener("click", () => closeMobileSidebar());
+  // Escape already closes sidebar in keydown handler
+  // Resize to desktop: force-close without animation tax
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 780 && document.body.classList.contains("sidebar-open")) {
+      closeMobileSidebar({ instant: true });
+    }
   });
 }
 
-function closeMobileSidebar() {
+function isMobileDrawer() {
+  return window.matchMedia?.("(max-width: 780px)")?.matches === true;
+}
+
+function openMobileSidebar() {
+  if (!els.sidebar) return;
+  document.body.classList.remove("sidebar-closing");
+  if (els.sidebarScrim) els.sidebarScrim.hidden = false;
+  els.sidebarOpen?.setAttribute("aria-expanded", "true");
+
+  // Double rAF so scrim/drawer transitions actually run after unhide
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      els.sidebar.classList.add("is-open");
+      document.body.classList.add("sidebar-open");
+    });
+  });
+
+  // Occasional drawer open — light focus, not high-frequency
+  if (isMobileDrawer() && !reduceMotion()) {
+    window.setTimeout(() => {
+      const first = els.sidebar.querySelector(".feed-item.is-active, .feed-item, .btn");
+      first?.focus?.({ preventScroll: true });
+    }, 40);
+  }
+}
+
+async function closeMobileSidebar(opts = {}) {
+  if (!els.sidebar) return;
+  const open = els.sidebar.classList.contains("is-open") || document.body.classList.contains("sidebar-open");
+  if (!open) return;
+
+  els.sidebarOpen?.setAttribute("aria-expanded", "false");
+
+  if (opts.instant || reduceMotion() || !isMobileDrawer()) {
+    els.sidebar.classList.remove("is-open");
+    document.body.classList.remove("sidebar-open", "sidebar-closing");
+    if (els.sidebarScrim) els.sidebarScrim.hidden = true;
+    return;
+  }
+
+  // Exit faster, same spatial direction (Emil)
+  document.body.classList.add("sidebar-closing");
   els.sidebar.classList.remove("is-open");
-  document.body.classList.remove("sidebar-open");
+  await wait(200);
+  document.body.classList.remove("sidebar-open", "sidebar-closing");
+  if (els.sidebarScrim) els.sidebarScrim.hidden = true;
 }
 
 /* ---------- Boot ---------- */
@@ -1746,9 +1929,11 @@ async function boot() {
   const app = document.querySelector(".app");
   if (app && !reduceMotion()) app.classList.add("is-booting");
 
+  // 1) Instant paint from local cache
   loadPersisted();
   renderPresets();
   bindEvents();
+  bindFeedSyncLifecycle();
   applyFontScale();
   bindReaderScroll();
   ensureVirtualListBound();
@@ -1759,7 +1944,6 @@ async function boot() {
   renderLoading();
   updateSegPill(false);
 
-  // First paint shell enter — rare, allowed delight
   if (app && !reduceMotion()) {
     await nextFrame();
     app.classList.remove("is-booting");
@@ -1768,12 +1952,24 @@ async function boot() {
     app.classList.add("is-ready");
   }
 
+  // 2) Source of truth: Cloudflare KV
+  setStatus("正在同步云端订阅…");
+  const mode = await loadFeedsFromKV();
+  if (mode === "migrate" && state.feeds.length) {
+    const ok = await flushFeedsToKV({ quiet: false });
+    if (ok) setStatus("已将本机订阅上传到云端");
+  } else if (mode === "remote") {
+    renderNav();
+    renderList({ animate: true });
+  } else if (mode === "local") {
+    setStatus("云端暂不可用，使用本机订阅");
+  }
+
+  // 3) Pull articles after feeds are finalized
   if (state.feeds.length) {
-    // Silent refresh on load
     refreshAll().catch(() => {});
   } else {
     setStatus("添加订阅源开始阅读");
   }
 }
-
 boot();

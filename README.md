@@ -7,7 +7,7 @@
 - 添加 / 管理多个 RSS · Atom 订阅源
 - Cloudflare Pages Function 服务端代理解析（绕过浏览器 CORS）
 - 文章列表、正文阅读、未读 / 收藏筛选、本地搜索
-- 订阅与阅读状态保存在 `localStorage`（隐私友好，无需账号）
+- 订阅源列表持久化到 **Cloudflare Workers KV**（`/api/feeds`）；已读 / 收藏 / 字号仍在 `localStorage`（隐私友好）。
 - 预设热门源一键添加
 - 响应式布局（桌面双栏阅读 / 移动侧栏）
 
@@ -27,6 +27,7 @@ rss-agg/
 ├── css/style.css
 ├── js/app.js
 ├── functions/api/rss.js
+├── functions/api/feeds.js
 ├── _headers
 ├── package.json
 ├── wrangler.toml
@@ -81,8 +82,8 @@ npm run deploy
 
 ## 隐私与限制
 
-- 订阅列表与已读/收藏仅存浏览器本地
-- 服务端 Function 仅代理用户请求的 feed URL，不做持久化
+- 订阅源列表存 Cloudflare Workers KV（单租户 key `feeds:v1`）；已读/收藏仍仅存浏览器本地
+- 服务端 Function 代理 feed URL，并将订阅源列表写入 KV
 - 部分源可能屏蔽数据中心 IP，导致拉取失败
 - 正文依赖 feed 自带 content；无正文时请点「打开原文」
 

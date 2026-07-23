@@ -30,3 +30,5 @@ _*.py
 git-push.log
 git-push.err
 
+# Local KV mock store
+.data/

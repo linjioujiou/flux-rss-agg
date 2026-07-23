@@ -4,5 +4,9 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=()
 
-/api/*
+/api/rss*
   Cache-Control: public, max-age=300
+
+/api/feeds*
+  Cache-Control: no-store, no-cache, must-revalidate
+  CDN-Cache-Control: no-store

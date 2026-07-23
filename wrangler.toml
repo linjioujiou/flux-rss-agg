@@ -1,3 +1,11 @@
-name = "flux-rss"
+name = "flux-rss-agg"
 compatibility_date = "2024-11-01"
 pages_build_output_dir = "."
+
+# Cloudflare Workers KV for RSS feed sources
+# Namespace title: flux-rss-flux-feeds
+# Binding MUST be FEEDS (used by functions/api/feeds.js as env.FEEDS)
+[[kv_namespaces]]
+binding = "FEEDS"
+id = "5686e01dfd2743a8a1173a38e4677106"
+preview_id = "193775caaeb4481590bdee1274aa905e"
